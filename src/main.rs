@@ -11,6 +11,8 @@ use std::future::Future;
 use hyper_util::rt::tokio::{TokioIo, TokioTimer};
 use tokio::signal::unix::{signal, SignalKind};
 use log::{info,warn,error};
+use hyper::body::Frame;
+use http_body_util::BodyExt;
 
 mod config;
 
@@ -28,12 +30,32 @@ impl Service<Request<Incoming>> for Svc {
 			Ok(Response::builder().body(Full::new(Bytes::from(s))).unwrap())
 		}
 
+		let uri = req.uri();
+
+		info!("REQ {} {} {}", req.method(), uri.path(), uri.query().unwrap_or("-"));
+		let hdrs = req.headers();
+
+		for (key, value) in hdrs.iter() {
+			info!(" -> {:?}: {:?}", key, value);
+		}
 		let res = match req.uri().path() {
 			"/" => mk_response("home!".into()),
 			_ => mk_response("not found".into()),
 		};
+
 		Box::pin(async {
-			tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+			let frame_stream = req.into_body().map_frame(|frame| {
+				let frame = if let Ok(data) = frame.into_data() {
+					data.iter()
+						.map(|byte| byte.to_ascii_uppercase())
+						.collect::<Bytes>()
+				} else {
+					Bytes::new()
+				};
+
+				Frame::data(frame)
+			});
+
 			res
 		})
 	}
