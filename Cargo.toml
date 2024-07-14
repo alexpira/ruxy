@@ -1,5 +1,5 @@
 [package]
-name = "px-itm"
+name = "px-in-the-middle"
 version = "0.1.0"
 edition = "2021"
 
@@ -9,5 +9,7 @@ http-body-util = "0.1.2"
 hyper = { version = "1.4.1", features = ["full"] }
 hyper-util = { version = "0.1.6", features = ["full"] }
 log = "0.4.22"
+serde = { version = "1.0.204", features = ["derive"] }
 tokio = { version = "1.38.0", features = ["full"] }
 tokio-macros = "2.3.0"
+toml = "0.8.14"

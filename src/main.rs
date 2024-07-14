@@ -1,7 +1,5 @@
-#![deny(warnings)]
 
 use std::convert::Infallible;
-use std::net::SocketAddr;
 
 use bytes::Bytes;
 use http_body_util::Full;
@@ -12,6 +10,8 @@ use tokio::net::TcpListener;
 
 use hyper_util::rt::tokio::{TokioIo, TokioTimer};
 
+mod config;
+
 // An async function that consumes a request, does nothing with it and returns a
 // response.
 async fn hello(_: Request<impl hyper::body::Body>) -> Result<Response<Full<Bytes>>, Infallible> {
@@ -20,10 +20,12 @@ async fn hello(_: Request<impl hyper::body::Body>) -> Result<Response<Full<Bytes
 
 #[tokio::main]
 pub async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-//    pretty_env_logger::init();
+	let cfg = match config::Config::load("config.toml") {
+		Ok(v) => v,
+		Err(e) => panic!("{}", e)
+	};
 
-    // This address is localhost
-    let addr: SocketAddr = ([127, 0, 0, 1], 3000).into();
+	let addr = cfg.get_bind();
 
     // Bind to the port and listen for incoming TCP connections
     let listener = TcpListener::bind(addr).await?;
