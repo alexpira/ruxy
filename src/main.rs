@@ -62,17 +62,16 @@ impl Service<Request<Incoming>> for Svc {
 			}
 		}
 
-		let address = self.cfg.get_remote();
-		let domain = self.cfg.get_domain();
-		let cafile = self.cfg.get_ca_file();
-		let use_ssl = self.cfg.use_ssl();
+		let cfg = self.cfg.clone();
 
 		Box::pin(async move {
+			let address = cfg.get_remote();
+
 			let remote_request = remote_request.body(req.into_body()).unwrap();
 
-			if use_ssl {
+			if cfg.use_ssl() {
 				let stream = TcpStream::connect(address).await.unwrap();
-				let stream = ssl::wrap( stream, domain, cafile ).await.unwrap();
+				let stream = ssl::wrap( stream, cfg ).await.unwrap();
 
 				let io = TokioIo::new( stream );
 				let (mut sender, _conn) = hyper::client::conn::http1::handshake(io).await.unwrap();
@@ -154,6 +153,7 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 	};
 
 	let addr = cfg.get_bind();
+
 	let svc = Svc::new(cfg.clone());
 
 	let graceful = hyper_util::server::graceful::GracefulShutdown::new();

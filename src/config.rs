@@ -4,6 +4,7 @@ use std::{fs,error::Error};
 use serde::Deserialize;
 use std::time::Duration;
 use std::net::{ToSocketAddrs, SocketAddr};
+use log::warn;
 
 #[derive(Deserialize)]
 struct RawConfig {
@@ -11,7 +12,22 @@ struct RawConfig {
 	bind: Option<String>,
 	rewrite_host: Option<bool>,
 	graceful_shutdown_timeout: Option<String>,
+	ssl_mode: Option<String>,
 	cafile: Option<String>,
+}
+
+#[derive(Clone,Copy)]
+pub enum SslMode { BUILTIN, FILE, OS, DANGEROUS }
+
+impl std::fmt::Display for SslMode {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			SslMode::BUILTIN => formatter.write_str("BUILTIN"),
+			SslMode::OS => formatter.write_str("OS"),
+			SslMode::FILE => formatter.write_str("FILE"),
+			SslMode::DANGEROUS => formatter.write_str("DANGEROUS"),
+		}
+    }
 }
 
 #[derive(Clone)]
@@ -22,6 +38,7 @@ pub struct Config {
 	rewrite_host: Option<String>,
 	bind: SocketAddr,
 	graceful_shutdown_timeout: Duration,
+	ssl_mode: SslMode,
 	cafile: Option<PathBuf>,
 }
 
@@ -40,8 +57,13 @@ impl Config {
 			rewrite_host: Self::parse_rewrite_host(&raw_cfg),
 			bind: Self::parse_bind(&raw_cfg),
 			graceful_shutdown_timeout: Self::parse_graceful_shutdown_timeout(&raw_cfg),
+			ssl_mode: Self::parse_ssl_mode(&raw_cfg),
 			cafile: Self::parse_cafile(&raw_cfg),
 		})
+	}
+
+	pub fn get_ssl_mode(&self) -> SslMode {
+		self.ssl_mode
 	}
 
 	pub fn get_ca_file(&self) -> Option<PathBuf> {
@@ -157,6 +179,28 @@ impl Config {
 
 	fn parse_cafile(rc: &RawConfig) -> Option<PathBuf> {
 		rc.cafile.as_ref().and_then(|v| Some(Path::new(v).to_path_buf()))
+	}
+
+	fn parse_ssl_mode(rc: &RawConfig) -> SslMode {
+		let value = rc.ssl_mode
+			.clone()
+			.unwrap_or("builtin".to_string())
+			.trim()
+			.to_lowercase();
+
+		match value.as_str() {
+			"unverified" => SslMode::DANGEROUS,
+			"dangerous" => SslMode::DANGEROUS,
+			"ca" => SslMode::FILE,
+			"cafile" => SslMode::FILE,
+			"file" => SslMode::FILE,
+			"os" => SslMode::OS,
+			"builtin" => SslMode::BUILTIN,
+			_ => {
+				warn!("Invalid ssl_mode in config file, falling back to builtin");
+				SslMode::BUILTIN
+			},
+		}
 	}
 }
 

@@ -2,5 +2,6 @@
 bind = "localhost:8080"
 remote = "https://www.google.it/"
 rewrite_host = true
+ssl_mode = "os"
 graceful_shutdown_timeout = "2sec"
 
