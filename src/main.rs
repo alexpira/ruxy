@@ -52,12 +52,6 @@ impl Service<Request<Incoming>> for Svc {
 			remote_request = remote_request.header(key, value);
 		}
 
-/*		let res = match req.uri().path() {
-			"/" => mk_response("home!".into()),
-			_ => mk_response("not found".into()),
-		}; */
-
-
 		let address = self.cfg.get_remote();
 
 		Box::pin(async {

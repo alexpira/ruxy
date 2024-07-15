@@ -1,5 +1,5 @@
 
 bind = "localhost:8080"
-remote = "localhost:8000"
+remote = "http://www.google.it/"
 graceful_shutdown_timeout = "2sec"
 
