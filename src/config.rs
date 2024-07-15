@@ -1,5 +1,5 @@
 
-use std::path::Path;
+use std::path::{Path,PathBuf};
 use std::{fs,error::Error};
 use serde::Deserialize;
 use std::time::Duration;
@@ -9,21 +9,25 @@ use std::net::{ToSocketAddrs, SocketAddr};
 struct RawConfig {
 	remote: String,
 	bind: Option<String>,
+	rewrite_host: Option<bool>,
 	graceful_shutdown_timeout: Option<String>,
+	cafile: Option<String>,
 }
 
 #[derive(Clone)]
 pub struct Config {
 	remote: (String, u16),
+	remote_domain_raw: String,
 	remote_ssl: bool,
+	rewrite_host: Option<String>,
 	bind: SocketAddr,
 	graceful_shutdown_timeout: Duration,
+	cafile: Option<PathBuf>,
 }
 
 impl Config {
 	pub fn load(file: &str) -> Result<Self, Box<dyn Error>> {
 		let content: String = fs::read_to_string(Path::new(file))?;
-		//let cfg = content.parse::<toml::Table>()?;
 		let raw_cfg: RawConfig = match toml::from_str(&content) {
 			Ok(v) => v,
 			Err(err) => return Err(Box::from(format!("Config parsing error: {}", err)))
@@ -31,10 +35,29 @@ impl Config {
 
 		Ok(Config {
 			remote: Self::parse_remote(&raw_cfg),
+			remote_domain_raw: Self::parse_remote_domain(&raw_cfg),
 			remote_ssl: Self::parse_remote_ssl(&raw_cfg),
+			rewrite_host: Self::parse_rewrite_host(&raw_cfg),
 			bind: Self::parse_bind(&raw_cfg),
 			graceful_shutdown_timeout: Self::parse_graceful_shutdown_timeout(&raw_cfg),
+			cafile: Self::parse_cafile(&raw_cfg),
 		})
+	}
+
+	pub fn get_ca_file(&self) -> Option<PathBuf> {
+		self.cafile.clone()
+	}
+
+	pub fn use_ssl(&self) -> bool {
+		self.remote_ssl
+	}
+
+	pub fn get_domain(&self) -> String {
+		self.remote_domain_raw.clone()
+	}
+
+	pub fn get_rewrite_host(&self) -> Option<String> {
+		self.rewrite_host.clone()
 	}
 
 	pub fn get_graceful_shutdown_timeout(&self) -> Duration {
@@ -54,7 +77,7 @@ impl Config {
 		if def.starts_with("https://") { 443 } else { 80 }
 	}
 
-	fn parse_remote(rc: &RawConfig) -> (String,u16) {
+	fn extract_remote_host_def(rc: &RawConfig) -> String {
 		let mut def = rc.remote.clone();
 		if let Some(proto_split) = def.find("://") {
 			def = def[proto_split+3..].to_string();
@@ -62,6 +85,25 @@ impl Config {
 		if let Some(path_split) = def.find("/") {
 			def = def[..path_split].to_string();
 		}
+		if let Some(auth_split) = def.find("@") {
+			def = def[auth_split+1..].to_string();
+		}
+		def
+	}
+
+	fn parse_remote_domain(rc: &RawConfig) -> String {
+		Self::extract_remote_host_def(rc)
+	}
+
+	fn parse_rewrite_host(rc: &RawConfig) -> Option<String> {
+		if !rc.rewrite_host.unwrap_or(false) {
+			return None;
+		}
+		Some(Self::extract_remote_host_def(rc))
+	}
+
+	fn parse_remote(rc: &RawConfig) -> (String,u16) {
+		let def = Self::extract_remote_host_def(rc);
 		if let Some(port_split) = def.find(":") {
 			let host = def[..port_split].to_string();
 			let port = def[port_split+1..].parse::<u16>().unwrap_or(Self::default_port(rc));
@@ -111,6 +153,10 @@ impl Config {
 			}
 		}
 		Duration::from_secs(10)
+	}
+
+	fn parse_cafile(rc: &RawConfig) -> Option<PathBuf> {
+		rc.cafile.as_ref().and_then(|v| Some(Path::new(v).to_path_buf()))
 	}
 }
 
