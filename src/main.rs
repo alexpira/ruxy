@@ -13,15 +13,23 @@ use tokio::signal::unix::{signal, SignalKind};
 use log::{info,warn,error};
 use hyper::body::Frame;
 use http_body_util::BodyExt;
+use tokio::net::TcpStream;
 
 mod config;
 
 #[derive(Clone)]
 struct Svc {
+	cfg: config::Config,
+}
+
+impl Svc {
+	fn new(cfg: config::Config) -> Self {
+		Self { cfg }
+	}
 }
 
 impl Service<Request<Incoming>> for Svc {
-	type Response = Response<Full<Bytes>>;
+	type Response = Response<Incoming>;
 	type Error = hyper::Error;
 	type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
@@ -35,19 +43,72 @@ impl Service<Request<Incoming>> for Svc {
 		info!("REQ {} {} {}", req.method(), uri.path(), uri.query().unwrap_or("-"));
 		let hdrs = req.headers();
 
+		let mut remote_request = Request::builder()
+			.method(req.method())
+			.uri(req.uri());
+
 		for (key, value) in hdrs.iter() {
-			info!(" -> {:?}: {:?}", key, value);
+			// info!(" -> {:?}: {:?}", key, value);
+			remote_request = remote_request.header(key, value);
 		}
-		let res = match req.uri().path() {
+
+/*		let res = match req.uri().path() {
 			"/" => mk_response("home!".into()),
 			_ => mk_response("not found".into()),
-		};
+		}; */
+
+
+		let address = self.cfg.get_remote();
 
 		Box::pin(async {
+			let remote_request = remote_request.body(req.into_body()).unwrap();
+
+			let stream = TcpStream::connect(address).await.unwrap();
+			let io = TokioIo::new(stream);
+			let (mut sender, conn) = hyper::client::conn::http1::handshake(io).await.unwrap();
+			tokio::task::spawn(async move {
+				if let Err(err) = conn.await {
+					info!("Connection failed: {:?}", err);
+				}
+			});
+
+			let mut res = sender.send_request(remote_request).await.unwrap();
+
+
+
+
+
+/*
+			let mut fs = req.into_body();
+			loop {
+				let item = fs.frame().await;
+				if item.is_none() {
+					info!("None");
+					break;
+				}
+				match item.unwrap() {
+					Ok(frm) => {
+						if let Ok(data) = frm.into_data() {
+							for ch in data.into_iter() {
+								info!("RU: {}", ch);
+							}
+						}
+					},
+					Err(e) => {
+						error!("Data read failed {}", e);
+						break;
+					}
+				}
+			}
+*/
+
+/*
 			let frame_stream = req.into_body().map_frame(|frame| {
 				let frame = if let Ok(data) = frame.into_data() {
 					data.iter()
-						.map(|byte| byte.to_ascii_uppercase())
+						.map(|byte| {
+							byte.to_ascii_uppercase()
+						})
 						.collect::<Bytes>()
 				} else {
 					Bytes::new()
@@ -55,8 +116,8 @@ impl Service<Request<Incoming>> for Svc {
 
 				Frame::data(frame)
 			});
-
-			res
+*/
+			Ok(res)
 		})
 	}
 }
@@ -78,7 +139,7 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 	};
 
 	let addr = cfg.get_bind();
-	let svc = Svc {};
+	let svc = Svc::new(cfg.clone());
 
 	let graceful = hyper_util::server::graceful::GracefulShutdown::new();
 	let mut signal = std::pin::pin!(shutdown_signal());

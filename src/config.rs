@@ -5,7 +5,7 @@ use serde::Deserialize;
 use std::time::Duration;
 use std::net::{ToSocketAddrs, SocketAddr};
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct Config {
 	remote: String,
 	bind: Option<String>,
@@ -20,6 +20,10 @@ impl Config {
 			Ok(v) => Ok(v),
 			Err(err) => Err(Box::from(format!("Config parsing error: {}", err)))
 		}
+	}
+
+	pub fn get_remote(&self) -> String {
+		self.remote.clone()
 	}
 
 	pub fn get_bind(&self) -> SocketAddr {

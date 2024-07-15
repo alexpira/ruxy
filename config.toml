@@ -1,5 +1,5 @@
 
 bind = "localhost:8080"
-remote = "http://localhost:8000/"
+remote = "localhost:8000"
 graceful_shutdown_timeout = "2sec"
 
