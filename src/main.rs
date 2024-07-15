@@ -63,20 +63,19 @@ impl Service<Request<Incoming>> for Svc {
 		}
 
 		let address = self.cfg.get_remote();
+		let domain = self.cfg.get_domain();
+		let cafile = self.cfg.get_ca_file();
+		let use_ssl = self.cfg.use_ssl();
 
-		Box::pin(async {
+		Box::pin(async move {
 			let remote_request = remote_request.body(req.into_body()).unwrap();
 
-			if self.cfg.use_ssl() {
+			if use_ssl {
 				let stream = TcpStream::connect(address).await.unwrap();
+				let stream = ssl::wrap( stream, domain, cafile ).await.unwrap();
 
-				let io = TokioIo::new( ssl::wrap(stream, &self.cfg).await.unwrap() );
-				let (mut sender, conn) = hyper::client::conn::http1::handshake(io).await.unwrap();
-				tokio::task::spawn(async move {
-					if let Err(err) = conn.await {
-						info!("Connection failed: {:?}", err);
-					}
-				});
+				let io = TokioIo::new( stream );
+				let (mut sender, _conn) = hyper::client::conn::http1::handshake(io).await.unwrap();
 				Ok(sender.send_request(remote_request).await.unwrap())
 			} else {
 				let stream = TcpStream::connect(address).await.unwrap();

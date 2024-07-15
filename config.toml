@@ -1,5 +1,6 @@
 
 bind = "localhost:8080"
-remote = "http://www.google.it/"
+remote = "https://www.google.it/"
+rewrite_host = true
 graceful_shutdown_timeout = "2sec"
 
