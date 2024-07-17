@@ -10,7 +10,6 @@ hyper = { version = "1.4.1", features = ["full"] }
 hyper-util = { version = "0.1.6", features = ["full"] }
 log = "0.4.22"
 rustls-pemfile = "2.1.2"
-rustls-platform-verifier = "0.3.2"
 serde = { version = "1.0.204", features = ["derive"] }
 simple_logger = "5.0.0"
 tokio = { version = "1.38.0", features = ["full"] }
@@ -18,3 +17,8 @@ tokio-macros = "2.3.0"
 tokio-rustls = "0.26.0"
 toml = "0.8.14"
 webpki-roots = "0.26.3"
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+jni = "0.21.1"
+rustls-platform-verifier = "0.3.2"
+

@@ -9,7 +9,64 @@ use tokio_rustls::client::TlsStream;
 use rustls::pki_types::ServerName;
 use log::warn;
 
+use rustls::{Error,SignatureScheme,DigitallySignedStruct};
+use rustls::client::danger::{ServerCertVerifier,ServerCertVerified,HandshakeSignatureValid};
+use rustls::pki_types::{UnixTime,CertificateDer};
+
 use crate::config::{Config,SslMode};
+
+#[derive(Debug)]
+struct SslCertValidationDisabler { }
+impl ServerCertVerifier for SslCertValidationDisabler {
+	fn verify_server_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, Error> {
+		Ok( ServerCertVerified::assertion() )
+	}
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, Error> {
+		Ok( HandshakeSignatureValid::assertion() )
+	}
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, Error> {
+		Ok( HandshakeSignatureValid::assertion() )
+	}
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+		let mut rv = Vec::new();
+
+		rv.push(SignatureScheme::RSA_PKCS1_SHA1);
+		rv.push(SignatureScheme::ECDSA_SHA1_Legacy);
+		rv.push(SignatureScheme::RSA_PKCS1_SHA256);
+		rv.push(SignatureScheme::ECDSA_NISTP256_SHA256);
+		rv.push(SignatureScheme::RSA_PKCS1_SHA384);
+		rv.push(SignatureScheme::ECDSA_NISTP384_SHA384);
+		rv.push(SignatureScheme::RSA_PKCS1_SHA512);
+		rv.push(SignatureScheme::ECDSA_NISTP521_SHA512);
+		rv.push(SignatureScheme::RSA_PSS_SHA256);
+		rv.push(SignatureScheme::RSA_PSS_SHA384);
+		rv.push(SignatureScheme::RSA_PSS_SHA512);
+		rv.push(SignatureScheme::ED25519);
+		rv.push(SignatureScheme::ED448);
+
+		rv
+	}
+}
+
 
 fn build_ssl_config(cfg: &Config) -> rustls::ClientConfig {
 	let config = rustls::ClientConfig::builder();
@@ -38,13 +95,19 @@ fn build_ssl_config(cfg: &Config) -> rustls::ClientConfig {
 				.with_no_client_auth()
 		},
 		SslMode::OS => {
+#[cfg(target_os = "android")]
+			panic!("\"os\" ssl mode not availble on android");
+#[cfg(not(target_os = "android"))]
 			config
 				.dangerous() // The `Verifier` we're using is actually safe
 				.with_custom_certificate_verifier(Arc::new(rustls_platform_verifier::Verifier::new()))
 				.with_no_client_auth()
 		},
 		SslMode::DANGEROUS => {
-			panic!("Unimplemented");
+			config
+				.dangerous()
+				.with_custom_certificate_verifier(Arc::new(SslCertValidationDisabler { }))
+				.with_no_client_auth()
 		},
 	}
 }
