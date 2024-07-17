@@ -74,7 +74,12 @@ impl Service<Request<Incoming>> for Svc {
 				let stream = ssl::wrap( stream, cfg ).await.unwrap();
 
 				let io = TokioIo::new( stream );
-				let (mut sender, _conn) = hyper::client::conn::http1::handshake(io).await.unwrap();
+				let (mut sender, conn) = hyper::client::conn::http1::handshake(io).await.unwrap();
+				tokio::task::spawn(async move {
+					if let Err(err) = conn.await {
+						info!("Connection failed: {:?}", err);
+					}
+				});
 				Ok(sender.send_request(remote_request).await.unwrap())
 			} else {
 				let stream = TcpStream::connect(address).await.unwrap();
