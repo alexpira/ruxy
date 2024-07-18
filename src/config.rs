@@ -14,6 +14,7 @@ struct RawConfig {
 	graceful_shutdown_timeout: Option<String>,
 	ssl_mode: Option<String>,
 	cafile: Option<String>,
+	log_headers: Option<bool>,
 }
 
 #[derive(Clone,Copy)]
@@ -40,6 +41,7 @@ pub struct Config {
 	graceful_shutdown_timeout: Duration,
 	ssl_mode: SslMode,
 	cafile: Option<PathBuf>,
+	log_headers: bool,
 }
 
 impl Config {
@@ -59,6 +61,7 @@ impl Config {
 			graceful_shutdown_timeout: Self::parse_graceful_shutdown_timeout(&raw_cfg),
 			ssl_mode: Self::parse_ssl_mode(&raw_cfg),
 			cafile: Self::parse_cafile(&raw_cfg),
+			log_headers: raw_cfg.log_headers.unwrap_or(false),
 		})
 	}
 
@@ -92,6 +95,10 @@ impl Config {
 
 	pub fn get_bind(&self) -> SocketAddr {
 		self.bind
+	}
+
+	pub fn log_headers(&self) -> bool {
+		self.log_headers
 	}
 
 	fn default_port(rc: &RawConfig) -> u16 {

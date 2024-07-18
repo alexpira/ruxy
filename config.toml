@@ -1,7 +1,8 @@
 
 bind = "localhost:8080"
-remote = "https://localhost:8000/"
+remote = "http://localhost:8000/"
 rewrite_host = true
+log_headers = true
 
 # ssl_mode = "os"
 

@@ -58,7 +58,9 @@ impl Svc {
 
 		let mut host_done = false;
 		for (key, value) in hdrs.iter() {
-			// info!(" -> {:?}: {:?}", key, value);
+			if cfg.log_headers() {
+				info!(" -> {:?}: {:?}", key, value);
+			}
 			if key == "host" {
 				if let Some(repl) = cfg.get_rewrite_host() {
 					remote_request = remote_request.header(key, repl);
@@ -110,26 +112,20 @@ impl Service<Request<Incoming>> for Svc {
 	type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
 	fn call(&self, req: Request<Incoming>) -> Self::Future {
-		/*fn mk_respdonse(s: String) -> Result<Response<Full<Bytes>>, hyper::Error> {
-			Ok(Response::builder().body(Full::new(Bytes::from(s))).unwrap())
-		}*/
-
 		let uri = req.uri();
 
 		info!("REQUEST {} {} {}", req.method(), uri.path(), uri.query().unwrap_or("-"));
 
+		let loghdr = self.cfg.log_headers();
 		let cfg = self.cfg.clone();
 		Box::pin(async move {
 			match Self::forward(cfg, req).await {
 				Ok(remote_resp) => {
-					let mut resp = Response::builder()
-						.status(remote_resp.status());
-					for (key, value) in remote_resp.headers().iter() {
-						// info!(" <- {:?}: {:?}", key, value);
-						resp = resp.header(key, value);
+					if loghdr {
+						remote_resp.headers().iter().for_each(|(k,v)| info!(" <- {:?}: {:?}", k, v));
 					}
 
-					errmg!(resp.body(GatewayBody::Incoming(remote_resp.into_body())))
+					Ok(remote_resp.map(|v| GatewayBody::Incoming(v)))
 				},
 				Err(e) => {
 					error!("Call forward failed: {:?}", e);

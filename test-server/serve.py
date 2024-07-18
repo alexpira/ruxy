@@ -16,7 +16,7 @@ class WebRequestHandler(BaseHTTPRequestHandler):
 		if (data):
 			print(data)
 
-		self.send_response(200)
+		self.send_response(200, "Yup")
 		self.send_header("Content-Type", "text/plain")
 		self.end_headers()
 		self.wfile.write("Hello".encode("utf-8"))
