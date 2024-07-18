@@ -121,13 +121,21 @@ impl Service<Request<Incoming>> for Svc {
 		let cfg = self.cfg.clone();
 		Box::pin(async move {
 			match Self::forward(cfg, req).await {
-				Ok(v) => Ok(v)
+				Ok(remote_resp) => {
+					let mut resp = Response::builder()
+						.status(remote_resp.status());
+					for (key, value) in remote_resp.headers().iter() {
+						// info!(" <- {:?}: {:?}", key, value);
+						resp = resp.header(key, value);
+					}
+
+					errmg!(resp.body(GatewayBody::Incoming(remote_resp.into_body())))
+				},
 				Err(e) => {
 					error!("Call forward failed: {:?}", e);
-					Ok(Response::builder()
+					errmg!(Response::builder()
 						.status(502)
-						.body(GatewayBody::Empty)
-						.unwrap())
+						.body(GatewayBody::Empty))
 				}
 			}
 		})
