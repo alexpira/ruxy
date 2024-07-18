@@ -10,9 +10,34 @@ use hyper_util::rt::tokio::{TokioIo, TokioTimer};
 use tokio::signal::unix::{signal, SignalKind};
 use log::{info,warn,error};
 use tokio::net::TcpStream;
+use core::task::{Context,Poll};
+use hyper::body::Frame;
 
 mod config;
 mod ssl;
+mod logcfg;
+
+macro_rules! errmg {
+	($arg: expr) => {
+		($arg).map_err(|e| format!("{:?} at {}:{}", e, file!(), line!()))
+	}
+}
+
+enum GatewayBody {
+	Incoming(hyper::body::Incoming),
+	Empty,
+}
+impl hyper::body::Body for GatewayBody where {
+	type Data = hyper::body::Bytes;
+	type Error = hyper::Error;
+
+	fn poll_frame( self: Pin<&mut Self>, cx: &mut Context<'_>,) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+		match &mut *self.get_mut(){
+			Self::Incoming(incoming) => Pin::new(incoming).poll_frame(cx),
+			Self::Empty => Poll::Ready(None)
+		}
+	}
+}
 
 #[derive(Clone)]
 struct Svc {
@@ -23,21 +48,92 @@ impl Svc {
 	fn new(cfg: config::Config) -> Self {
 		Self { cfg }
 	}
+
+	async fn forward(cfg: config::Config, req: Request<Incoming>) -> Result<Response<Incoming>,String> {
+		let hdrs = req.headers();
+
+		let mut remote_request = Request::builder()
+			.method(req.method())
+			.uri(req.uri());
+
+		let mut host_done = false;
+		for (key, value) in hdrs.iter() {
+			// info!(" -> {:?}: {:?}", key, value);
+			if key == "host" {
+				if let Some(repl) = cfg.get_rewrite_host() {
+					remote_request = remote_request.header(key, repl);
+					host_done = true;
+					continue;
+				}
+			}
+			remote_request = remote_request.header(key, value);
+		}
+		if !host_done {
+			if let Some(repl) = cfg.get_rewrite_host() {
+				remote_request = remote_request.header("host", repl);
+			}
+		}
+
+		let address = cfg.get_remote();
+
+		let remote_request = errmg!(remote_request.body(req.into_body()))?;
+
+		if cfg.use_ssl() {
+			let stream = errmg!(TcpStream::connect(address).await)?;
+			let stream = ssl::wrap( stream, cfg.clone() ).await?;
+
+			let io = TokioIo::new( stream );
+			let (mut sender, conn) = errmg!(hyper::client::conn::http1::handshake(io).await)?;
+			tokio::task::spawn(async move {
+				if let Err(err) = conn.await {
+					warn!("Connection failed: {:?}", err);
+				}
+			});
+			errmg!(sender.send_request(remote_request).await)
+		} else {
+			let stream = errmg!(TcpStream::connect(address).await)?;
+			let io = TokioIo::new(stream);
+			let (mut sender, conn) = errmg!(hyper::client::conn::http1::handshake(io).await)?;
+			tokio::task::spawn(async move {
+				if let Err(err) = conn.await {
+					warn!("Connection failed: {:?}", err);
+				}
+			});
+			errmg!(sender.send_request(remote_request).await)
+		}
+	}
 }
 
 impl Service<Request<Incoming>> for Svc {
-	type Response = Response<Incoming>;
-	type Error = hyper::Error;
+	type Response = Response<GatewayBody>;
+	type Error = String;
 	type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
 	fn call(&self, req: Request<Incoming>) -> Self::Future {
-		/*fn mk_response(s: String) -> Result<Response<Full<Bytes>>, hyper::Error> {
+		/*fn mk_respdonse(s: String) -> Result<Response<Full<Bytes>>, hyper::Error> {
 			Ok(Response::builder().body(Full::new(Bytes::from(s))).unwrap())
 		}*/
 
 		let uri = req.uri();
 
 		info!("REQUEST {} {} {}", req.method(), uri.path(), uri.query().unwrap_or("-"));
+
+		let cfg = self.cfg.clone();
+		Box::pin(async move {
+			match Self::forward(cfg, req).await {
+				Ok(v) => Ok(v)
+				Err(e) => {
+					error!("Call forward failed: {:?}", e);
+					Ok(Response::builder()
+						.status(502)
+						.body(GatewayBody::Empty)
+						.unwrap())
+				}
+			}
+		})
+	}
+
+/*
 		let hdrs = req.headers();
 
 		let mut remote_request = Request::builder()
@@ -65,35 +161,35 @@ impl Service<Request<Incoming>> for Svc {
 		let cfg = self.cfg.clone();
 
 		Box::pin(async move {
-			let address = cfg.get_remote();
+			let address = self.cfg.get_remote();
 
-			let remote_request = remote_request.body(req.into_body()).unwrap();
+			let remote_request = errmg!(remote_request.body(req.into_body()))?;
 
 			if cfg.use_ssl() {
-				let stream = TcpStream::connect(address).await.unwrap();
-				let stream = ssl::wrap( stream, cfg ).await.unwrap();
+				let stream = errmg!(TcpStream::connect(address).await)?;
+				let stream = ssl::wrap( stream, cfg ).await?;
 
 				let io = TokioIo::new( stream );
-				let (mut sender, conn) = hyper::client::conn::http1::handshake(io).await.unwrap();
+				let (mut sender, conn) = errmg!(hyper::client::conn::http1::handshake(io).await)?;
 				tokio::task::spawn(async move {
 					if let Err(err) = conn.await {
-						info!("Connection failed: {:?}", err);
+						warn!("Connection failed: {:?}", err);
 					}
 				});
-				Ok(sender.send_request(remote_request).await.unwrap())
+				errmg!(sender.send_request(remote_request).await)
 			} else {
-				let stream = TcpStream::connect(address).await.unwrap();
+				let stream = errmg!(TcpStream::connect(address).await)?;
 				let io = TokioIo::new(stream);
-				let (mut sender, conn) = hyper::client::conn::http1::handshake(io).await.unwrap();
+				let (mut sender, conn) = errmg!(hyper::client::conn::http1::handshake(io).await)?;
 				tokio::task::spawn(async move {
 					if let Err(err) = conn.await {
-						info!("Connection failed: {:?}", err);
+						warn!("Connection failed: {:?}", err);
 					}
 				});
-				Ok(sender.send_request(remote_request).await.unwrap())
+				errmg!(sender.send_request(remote_request).await)
 			}
 
-
+*/
 
 
 
@@ -137,8 +233,6 @@ impl Service<Request<Incoming>> for Svc {
 				Frame::data(frame)
 			});
 */
-		})
-	}
 }
 
 async fn shutdown_signal() {
@@ -150,7 +244,7 @@ async fn shutdown_signal() {
 
 #[tokio::main]
 pub async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-	simple_logger::SimpleLogger::new().init().unwrap();
+	logcfg::init_logging();
 
 	let cfg = match config::Config::load("config.toml") {
 		Ok(v) => v,

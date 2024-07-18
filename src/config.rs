@@ -114,7 +114,12 @@ impl Config {
 	}
 
 	fn parse_remote_domain(rc: &RawConfig) -> String {
-		Self::extract_remote_host_def(rc)
+		let def = Self::extract_remote_host_def(rc);
+		if let Some(port_split) = def.find(":") {
+			def[..port_split].to_string()
+		} else {
+			def
+		}
 	}
 
 	fn parse_rewrite_host(rc: &RawConfig) -> Option<String> {

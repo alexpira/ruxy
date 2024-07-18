@@ -24,7 +24,14 @@ class WebRequestHandler(BaseHTTPRequestHandler):
 	def do_POST(self):
 		self.do_GET(method='POST')
 
+import ssl, os, sys
+
 if __name__ == "__main__":
 	server = HTTPServer(("0.0.0.0", 8000), WebRequestHandler)
+	if len(sys.argv) > 1 and sys.argv[1] == 'ssl':
+		fold = os.path.dirname(sys.argv[0])
+		context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+		context.load_cert_chain(os.path.join('cert.pem'), os.path.join(fold, 'key.pem'))
+		server.socket = context.wrap_socket(server.socket, server_side=True)
 	server.serve_forever()
 

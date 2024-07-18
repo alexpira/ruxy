@@ -1,13 +1,12 @@
 
 use std::fs::File;
-use std::io;
 use std::io::BufReader;
 use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio_rustls::{rustls, TlsConnector};
 use tokio_rustls::client::TlsStream;
 use rustls::pki_types::ServerName;
-use log::warn;
+use log::{warn,error};
 
 use rustls::{Error,SignatureScheme,DigitallySignedStruct};
 use rustls::client::danger::{ServerCertVerifier,ServerCertVerified,HandshakeSignatureValid};
@@ -82,9 +81,20 @@ fn build_ssl_config(cfg: &Config) -> rustls::ClientConfig {
 		SslMode::FILE => {
 			let mut root_cert_store = rustls::RootCertStore::empty();
 			if let Some(ca) = cfg.get_ca_file() {
-				let mut pem = BufReader::new(File::open(ca).unwrap());
-				for cert in rustls_pemfile::certs(&mut pem) {
-					root_cert_store.add(cert.unwrap()).unwrap();
+				match File::open(ca.clone()) {
+					Err(e) => error!("Cannot open file {:?}: {:?}", ca, e),
+					Ok(pem_file) => {
+						let mut pem = BufReader::new(pem_file);
+						for cert in rustls_pemfile::certs(&mut pem) {
+							if cert.is_err() {
+								warn!("Invalid certificate in cafile");
+								continue;
+							}
+							if let Err(e) = root_cert_store.add(cert.unwrap()) {
+								warn!("Failed to add certificate: {:?}", e);
+							}
+						}
+					},
 				}
 			} else {
 				warn!("Wrong configuration: file ssl_mode set but no cafile defined, falling back to builtin mode");
@@ -117,10 +127,16 @@ pub async fn wrap(stream: TcpStream, cfg: Config) -> Result<TlsStream<TcpStream>
 	let connector = TlsConnector::from(Arc::new(config));
 
 	// let domain = ServerName::try_from(cfg.get_domain().as_str())
-	let domain = ServerName::try_from(cfg.get_domain())
-		.map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid dnsname")).unwrap()
-		.to_owned();
+	let domain_name = cfg.get_domain();
+	let domain = match ServerName::try_from(domain_name.clone())
+		.map_err(|_| format!("{}:{} invalid dnsname: {}", file!(), line!(), domain_name)) {
+		Ok(v) => v.to_owned(),
+		Err(e) => return Err(e)
+	};
 
-	Ok(connector.connect(domain, stream).await.unwrap())
+	match connector.connect(domain, stream).await {
+		Ok(v) => Ok(v),
+		Err(e) => Err(format!("{}:{} Connection failed: {:?}", file!(), line!(), e))
+	}
 }
 

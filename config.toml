@@ -1,7 +1,14 @@
 
 bind = "localhost:8080"
-remote = "https://www.google.it/"
+remote = "https://localhost:8000/"
 rewrite_host = true
-ssl_mode = "os"
+
+# ssl_mode = "os"
+
+# ssl_mode = "dangerous"
+
+ssl_mode = "file"
+cafile = "./test_server/cert.pem"
+
 graceful_shutdown_timeout = "2sec"
 
