@@ -26,6 +26,16 @@ macro_rules! errmg {
 	}
 }
 
+macro_rules! keepalive {
+	($arg: expr) => {
+		tokio::task::spawn(async move {
+			if let Err(err) = $arg.await {
+				warn!("Connection failed: {:?}", err);
+			}
+		});
+	}
+}
+
 enum GatewayBody {
 	Incoming(hyper::body::Incoming),
 	Empty,
@@ -85,28 +95,27 @@ impl Svc {
 	}
 
 	async fn handshake(io: TokioIo<Box<dyn Stream>>, cfg: config::Config) -> Result<Box<dyn Sender>, String> {
-
-/*
-		let (mut sender, conn) = match remote_proto {
-			HttpVersionMode::V1 => errmg!(hyper::client::conn::http1::handshake(io).await)?,
-			HttpVersionMode::V2Direct => {
-				let executor = hyper_util::rt::tokio::TokioExecutor::new();
-				errmg!(hyper::client::conn::http2::handshake(executor, io).await)?
+		match cfg.client_version() {
+			config::HttpVersionMode::V1 => {
+				let (sender, conn) = errmg!(hyper::client::conn::http1::handshake(io).await)?;
+				keepalive!(conn);
+				Ok(Box::new(sender))
 			},
-			HttpVersionMode::V2Handshake => {
+			config::HttpVersionMode::V2Direct => {
 				let executor = hyper_util::rt::tokio::TokioExecutor::new();
-				errmg!(hyper::client::conn::http2::handshake(executor, io).await)?
+				let (sender, conn) = errmg!(hyper::client::conn::http2::handshake(executor, io).await)?;
+				keepalive!(conn);
+				Ok(Box::new(sender))
 			},
-		};
-*/
+			config::HttpVersionMode::V2Handshake => {
+				let executor = hyper_util::rt::tokio::TokioExecutor::new();
+				let (sender, conn) = errmg!(hyper::client::conn::http2::handshake(executor, io).await)?;
+				// TODO: h2 handshake
 
-		let (mut sender, conn) = errmg!(hyper::client::conn::http1::handshake(io).await)?;
-		tokio::task::spawn(async move {
-			if let Err(err) = conn.await {
-				warn!("Connection failed: {:?}", err);
-			}
-		});
-		Ok(Box::new(sender))
+				keepalive!(conn);
+				Ok(Box::new(sender))
+			},
+		}
 	}
 
 
@@ -140,7 +149,6 @@ impl Svc {
 		let address = cfg.get_remote();
 
 		let remote_request = errmg!(remote_request.body(req.into_body()))?;
-		let remote_proto = cfg.client_version();
 
 		let stream = errmg!(Self::connect(address, cfg.clone()).await)?;
 		let io = TokioIo::new( stream );
