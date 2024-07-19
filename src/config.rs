@@ -18,18 +18,32 @@ struct RawConfig {
 }
 
 #[derive(Clone,Copy)]
-pub enum SslMode { BUILTIN, FILE, OS, DANGEROUS }
+pub enum SslMode { Builtin, File, OS, Dangerous }
 
 impl std::fmt::Display for SslMode {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
-			SslMode::BUILTIN => formatter.write_str("BUILTIN"),
+			SslMode::Builtin => formatter.write_str("Builtin"),
 			SslMode::OS => formatter.write_str("OS"),
-			SslMode::FILE => formatter.write_str("FILE"),
-			SslMode::DANGEROUS => formatter.write_str("DANGEROUS"),
+			SslMode::File => formatter.write_str("File"),
+			SslMode::Dangerous => formatter.write_str("Dangerous"),
 		}
     }
 }
+
+#[derive(Clone,Copy)]
+pub enum HttpVersionMode { V1, V2Direct, V2Handshake }
+
+impl std::fmt::Display for HttpVersionMode {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			HttpVersionMode::V1 => formatter.write_str("V1"),
+			HttpVersionMode::V2Direct => formatter.write_str("V2Direct"),
+			HttpVersionMode::V2Handshake => formatter.write_str("V2Handshake"),
+		}
+    }
+}
+
 
 #[derive(Clone)]
 pub struct Config {
@@ -73,7 +87,7 @@ impl Config {
 		self.cafile.clone()
 	}
 
-	pub fn use_ssl(&self) -> bool {
+	pub fn client_use_ssl(&self) -> bool {
 		self.remote_ssl
 	}
 
@@ -201,18 +215,25 @@ impl Config {
 			.to_lowercase();
 
 		match value.as_str() {
-			"unverified" => SslMode::DANGEROUS,
-			"dangerous" => SslMode::DANGEROUS,
-			"ca" => SslMode::FILE,
-			"cafile" => SslMode::FILE,
-			"file" => SslMode::FILE,
+			"unverified" => SslMode::Dangerous,
+			"dangerous" => SslMode::Dangerous,
+			"ca" => SslMode::File,
+			"cafile" => SslMode::File,
+			"file" => SslMode::File,
 			"os" => SslMode::OS,
-			"builtin" => SslMode::BUILTIN,
+			"builtin" => SslMode::Builtin,
 			_ => {
 				warn!("Invalid ssl_mode in config file, falling back to builtin");
-				SslMode::BUILTIN
+				SslMode::Builtin
 			},
 		}
+	}
+
+	pub fn server_version(&self) -> HttpVersionMode {
+		HttpVersionMode::V1
+	}
+	pub fn client_version(&self) -> HttpVersionMode {
+		HttpVersionMode::V1
 	}
 }
 

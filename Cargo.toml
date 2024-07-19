@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+async-trait = "0.1.81"
 bytes = { version = "1.6.1", features = ["serde"] }
 http-body-util = "0.1.2"
 hyper = { version = "1.4.1", features = ["full"] }

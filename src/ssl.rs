@@ -12,7 +12,7 @@ use rustls::{Error,SignatureScheme,DigitallySignedStruct};
 use rustls::client::danger::{ServerCertVerifier,ServerCertVerified,HandshakeSignatureValid};
 use rustls::pki_types::{UnixTime,CertificateDer};
 
-use crate::config::{Config,SslMode};
+use crate::config::{Config,SslMode,HttpVersionMode};
 
 #[derive(Debug)]
 struct SslCertValidationDisabler { }
@@ -70,15 +70,15 @@ impl ServerCertVerifier for SslCertValidationDisabler {
 fn build_ssl_config(cfg: &Config) -> rustls::ClientConfig {
 	let config = rustls::ClientConfig::builder();
 
-	match cfg.get_ssl_mode() {
-		SslMode::BUILTIN => {
+	let mut config = match cfg.get_ssl_mode() {
+		SslMode::Builtin => {
 			let mut root_cert_store = rustls::RootCertStore::empty();
 			root_cert_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
 			config
 				.with_root_certificates(root_cert_store)
 				.with_no_client_auth()
 		},
-		SslMode::FILE => {
+		SslMode::File => {
 			let mut root_cert_store = rustls::RootCertStore::empty();
 			if let Some(ca) = cfg.get_ca_file() {
 				match File::open(ca.clone()) {
@@ -113,13 +113,20 @@ fn build_ssl_config(cfg: &Config) -> rustls::ClientConfig {
 				.with_custom_certificate_verifier(Arc::new(rustls_platform_verifier::Verifier::new()))
 				.with_no_client_auth()
 		},
-		SslMode::DANGEROUS => {
+		SslMode::Dangerous => {
 			config
 				.dangerous()
 				.with_custom_certificate_verifier(Arc::new(SslCertValidationDisabler { }))
 				.with_no_client_auth()
 		},
-	}
+	};
+
+	config.alpn_protocols = match cfg.client_version() {
+		HttpVersionMode::V1 => vec![b"http/1.1".to_vec(), b"http/1.0".to_vec()],
+		HttpVersionMode::V2Direct => vec![b"h2".to_vec()],
+		HttpVersionMode::V2Handshake => vec![b"h2".to_vec(), b"http/1.1".to_vec(), b"http/1.0".to_vec()],
+	};
+	config
 }
 
 pub async fn wrap(stream: TcpStream, cfg: Config) -> Result<TlsStream<TcpStream>,String> {
