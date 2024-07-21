@@ -15,7 +15,7 @@ RUN chmod 0777 /ruxy
 RUN useradd -ms /bin/bash ruxer
 USER ruxer
 
-ENV BIND="localhost:8080"
+ENV BIND="0.0.0.0:8080"
 EXPOSE 8080
 
 CMD ["/ruxy"]
