@@ -4,17 +4,63 @@ use std::{fs,error::Error};
 use serde::Deserialize;
 use std::time::Duration;
 use std::net::{ToSocketAddrs, SocketAddr};
+use std::env;
 use log::warn;
 
 #[derive(Deserialize)]
 struct RawConfig {
-	remote: String,
+	remote: Option<String>,
 	bind: Option<String>,
 	rewrite_host: Option<bool>,
 	graceful_shutdown_timeout: Option<String>,
 	ssl_mode: Option<String>,
 	cafile: Option<String>,
 	log_headers: Option<bool>,
+}
+
+impl RawConfig {
+	fn from_env() -> RawConfig {
+		RawConfig {
+			remote: Self::env_str("REMOTE"),
+			bind: Self::env_str("BIND"),
+			rewrite_host: Self::env_bool("REWRITE_HOST"),
+			graceful_shutdown_timeout: Self::env_str("GRACEFUL_SHUTDOWN_TIMEOUT"),
+			ssl_mode: Self::env_str("SSL_MODE"),
+			cafile: Self::env_str("CAFILE"),
+			log_headers: Self::env_bool("LOG_HEADERS"),
+		}
+	}
+
+	fn env_str(name: &str) -> Option<String> {
+		match env::var(name) {
+			Ok(v) => Some(v),
+			Err(_) => None
+		}
+	}
+
+	fn env_bool(name: &str) -> Option<bool> {
+		Self::env_str(name).and_then(|v| {
+			let vi = v.to_lowercase();
+			let vi = vi.trim();
+			if "true" == vi || "1" == vi {
+				Some(true)
+			} else if "false" == vi || "0" == vi {
+				Some(false)
+			} else {
+				None
+			}
+		})
+	}
+
+	fn merge(&mut self, other: RawConfig) {
+		self.remote = self.remote.as_ref().and(other.remote);
+		self.bind = self.bind.as_ref().and(other.bind);
+		self.rewrite_host = self.rewrite_host.as_ref().and(other.rewrite_host);
+		self.graceful_shutdown_timeout = self.graceful_shutdown_timeout.as_ref().and(other.graceful_shutdown_timeout);
+		self.ssl_mode = self.ssl_mode.as_ref().and(other.ssl_mode);
+		self.cafile = self.cafile.as_ref().and(other.cafile);
+		self.log_headers = self.log_headers.as_ref().and(other.log_headers);
+	}
 }
 
 #[derive(Clone,Copy)]
@@ -60,11 +106,16 @@ pub struct Config {
 
 impl Config {
 	pub fn load(file: &str) -> Result<Self, Box<dyn Error>> {
-		let content: String = fs::read_to_string(Path::new(file))?;
-		let raw_cfg: RawConfig = match toml::from_str(&content) {
-			Ok(v) => v,
-			Err(err) => return Err(Box::from(format!("Config parsing error: {}", err)))
-		};
+		let mut raw_cfg = RawConfig::from_env();
+		let cfg_file = Path::new(file);
+		if cfg_file.exists() {
+			let content: String = fs::read_to_string(Path::new(file))?;
+			let file_cfg: RawConfig = match toml::from_str(&content) {
+				Ok(v) => v,
+				Err(err) => return Err(Box::from(format!("Config parsing error: {}", err)))
+			};
+			raw_cfg.merge(file_cfg);
+		}
 
 		Ok(Config {
 			remote: Self::parse_remote(&raw_cfg),
@@ -116,12 +167,12 @@ impl Config {
 	}
 
 	fn default_port(rc: &RawConfig) -> u16 {
-		let def = rc.remote.to_lowercase();
+		let def = rc.remote.clone().expect("Missing remote host in configuration").to_lowercase();
 		if def.starts_with("https://") { 443 } else { 80 }
 	}
 
 	fn extract_remote_host_def(rc: &RawConfig) -> String {
-		let mut def = rc.remote.clone();
+		let mut def = rc.remote.clone().expect("Missing remote host in configuration");
 		if let Some(proto_split) = def.find("://") {
 			def = def[proto_split+3..].to_string();
 		}
@@ -162,7 +213,7 @@ impl Config {
 	}
 
 	fn parse_remote_ssl(rc: &RawConfig) -> bool {
-		let def = rc.remote.to_lowercase();
+		let def = rc.remote.clone().expect("Missing remote host in configuration").to_lowercase();
 		def.starts_with("https://")
 	}
 
