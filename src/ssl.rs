@@ -1,16 +1,15 @@
 
 use std::fs::File;
+use std::path::PathBuf;
 use std::io::BufReader;
 use std::sync::Arc;
 use tokio::net::TcpStream;
-use tokio_rustls::{rustls, TlsConnector};
-use tokio_rustls::client::TlsStream;
-use rustls::pki_types::ServerName;
+use tokio_rustls::{rustls, TlsConnector, TlsAcceptor};
+use rustls::pki_types::{ServerName,UnixTime,CertificateDer,PrivateKeyDer};
 use log::{warn,error};
 
 use rustls::{Error,SignatureScheme,DigitallySignedStruct};
 use rustls::client::danger::{ServerCertVerifier,ServerCertVerified,HandshakeSignatureValid};
-use rustls::pki_types::{UnixTime,CertificateDer};
 
 use crate::config::{Config,SslMode,HttpVersionMode};
 
@@ -18,34 +17,34 @@ use crate::config::{Config,SslMode,HttpVersionMode};
 struct SslCertValidationDisabler { }
 impl ServerCertVerifier for SslCertValidationDisabler {
 	fn verify_server_cert(
-        &self,
-        _end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _server_name: &ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: UnixTime,
-    ) -> Result<ServerCertVerified, Error> {
+		&self,
+		_end_entity: &CertificateDer<'_>,
+		_intermediates: &[CertificateDer<'_>],
+		_server_name: &ServerName<'_>,
+		_ocsp_response: &[u8],
+		_now: UnixTime,
+	) -> Result<ServerCertVerified, Error> {
 		Ok( ServerCertVerified::assertion() )
 	}
 
-    fn verify_tls12_signature(
-        &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, Error> {
+	fn verify_tls12_signature(
+		&self,
+		_message: &[u8],
+		_cert: &CertificateDer<'_>,
+		_dss: &DigitallySignedStruct,
+	) -> Result<HandshakeSignatureValid, Error> {
 		Ok( HandshakeSignatureValid::assertion() )
 	}
 
-    fn verify_tls13_signature(
-        &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, Error> {
+	fn verify_tls13_signature(
+		&self,
+		_message: &[u8],
+		_cert: &CertificateDer<'_>,
+		_dss: &DigitallySignedStruct,
+	) -> Result<HandshakeSignatureValid, Error> {
 		Ok( HandshakeSignatureValid::assertion() )
 	}
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+	fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
 		let mut rv = Vec::new();
 
 		rv.push(SignatureScheme::RSA_PKCS1_SHA1);
@@ -66,8 +65,41 @@ impl ServerCertVerifier for SslCertValidationDisabler {
 	}
 }
 
+fn load_certs(filename: PathBuf) -> Result<Vec<CertificateDer<'static>>, String> {
+	let certfile = match File::open(filename.clone()) {
+		Ok(v) => v,
+		Err(e) => return Err(format!("failed to open {:?}: {}", filename, e)),
+	};
 
-fn build_ssl_config(cfg: &Config) -> rustls::ClientConfig {
+	let mut cert_store = Vec::new();
+	let mut reader = BufReader::new(certfile);
+	for cert in rustls_pemfile::certs(&mut reader) {
+		match cert {
+			Ok(c) => cert_store.push(c.into_owned()),
+			Err(e) => warn!("Invalid certificate in {:?}: {:?}", filename, e),
+		}
+	}
+
+	Ok(cert_store)
+}
+
+fn load_private_key(filename: PathBuf) -> Result<PrivateKeyDer<'static>, String> {
+	let keyfile = match File::open(filename.clone()) {
+		Ok(v) => v,
+		Err(e) => return Err(format!("failed to open {:?}: {:?}", filename, e)),
+	};
+	let mut reader = BufReader::new(keyfile);
+
+	match rustls_pemfile::private_key(&mut reader) {
+		Ok(k) => match k {
+			Some(v) => Ok(v),
+			None => Err(format!("No key found inside {:?}", filename)),
+		},
+		Err(e) => Err(format!("Invalid key in {:?}: {:?}", filename, e)),
+	}
+}
+
+fn build_client_ssl_config(cfg: &Config) -> rustls::ClientConfig {
 	let config = rustls::ClientConfig::builder();
 
 	let mut config = match cfg.get_ssl_mode() {
@@ -81,17 +113,12 @@ fn build_ssl_config(cfg: &Config) -> rustls::ClientConfig {
 		SslMode::File => {
 			let mut root_cert_store = rustls::RootCertStore::empty();
 			if let Some(ca) = cfg.get_ca_file() {
-				match File::open(ca.clone()) {
-					Err(e) => error!("Cannot open file {:?}: {:?}", ca, e),
-					Ok(pem_file) => {
-						let mut pem = BufReader::new(pem_file);
-						for cert in rustls_pemfile::certs(&mut pem) {
-							if cert.is_err() {
-								warn!("Invalid certificate in cafile");
-								continue;
-							}
-							if let Err(e) = root_cert_store.add(cert.unwrap()) {
-								warn!("Failed to add certificate: {:?}", e);
+				match load_certs(ca.clone()) {
+					Err(e) => error!("{}:{} {}", file!(), line!(), e),
+					Ok(certs) => {
+						for cert in certs.into_iter() {
+							if let Err(e) = root_cert_store.add(cert) {
+								warn!("Failed to add certificate from {:?}: {:?}", ca, e);
 							}
 						}
 					},
@@ -124,16 +151,15 @@ fn build_ssl_config(cfg: &Config) -> rustls::ClientConfig {
 	config.alpn_protocols = match cfg.client_version() {
 		HttpVersionMode::V1 => vec![b"http/1.1".to_vec(), b"http/1.0".to_vec()],
 		HttpVersionMode::V2Direct => vec![b"h2".to_vec()],
-		HttpVersionMode::V2Handshake => vec![b"h2".to_vec(), b"http/1.1".to_vec(), b"http/1.0".to_vec()],
+		HttpVersionMode::V2Handshake => vec![b"http/1.1".to_vec(), b"http/1.0".to_vec()],
 	};
 	config
 }
 
-pub async fn wrap(stream: TcpStream, cfg: Config) -> Result<TlsStream<TcpStream>,String> {
-	let config = build_ssl_config(&cfg);
+pub async fn wrap_client(stream: TcpStream, cfg: Config) -> Result<tokio_rustls::client::TlsStream<TcpStream>,String> {
+	let config = build_client_ssl_config(&cfg);
 	let connector = TlsConnector::from(Arc::new(config));
 
-	// let domain = ServerName::try_from(cfg.get_domain().as_str())
 	let domain_name = cfg.get_domain();
 	let domain = match ServerName::try_from(domain_name.clone())
 		.map_err(|_| format!("{}:{} invalid dnsname: {}", file!(), line!(), domain_name)) {
@@ -146,4 +172,38 @@ pub async fn wrap(stream: TcpStream, cfg: Config) -> Result<TlsStream<TcpStream>
 		Err(e) => Err(format!("{}:{} Connection failed: {:?}", file!(), line!(), e))
 	}
 }
+
+pub fn get_ssl_acceptor(cfg: Config) -> Result<TlsAcceptor,String> {
+	let certs = match cfg.get_server_ssl_cafile() {
+		Some(path) => load_certs(path)?,
+		None => return Err(format!("{}:{} Invalid server SSL configuration", file!(), line!())),
+	};
+	let key = match cfg.get_server_ssl_keyfile() {
+		Some(path) => load_private_key(path)?,
+		None => return Err(format!("{}:{} Invalid server SSL configuration", file!(), line!())),
+	};
+
+	let mut config = match rustls::ServerConfig::builder()
+		.with_no_client_auth()
+		.with_single_cert(certs, key) {
+		Ok(v) => v,
+		Err(e) => return Err(format!("{}:{} Invalid configuration: {:?}", file!(), line!(), e))
+	};
+
+	config.alpn_protocols = match cfg.server_version() {
+		HttpVersionMode::V1 => vec![b"http/1.1".to_vec(), b"http/1.0".to_vec()],
+		HttpVersionMode::V2Direct => vec![b"h2".to_vec()],
+		HttpVersionMode::V2Handshake => vec![b"http/1.1".to_vec(), b"http/1.0".to_vec()],
+	};
+
+	Ok(TlsAcceptor::from(Arc::new(config)))
+}
+
+pub async fn wrap_server(stream: TcpStream, acceptor: TlsAcceptor) -> Result<tokio_rustls::server::TlsStream<TcpStream>,String> {
+	match acceptor.accept(stream).await {
+		Ok(v) => Ok(v),
+		Err(e) => Err(format!("{}:{} Accept failed: {:?}", file!(), line!(), e))
+	}
+}
+
 

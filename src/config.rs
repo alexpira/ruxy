@@ -16,6 +16,8 @@ struct RawConfig {
 	ssl_mode: Option<String>,
 	cafile: Option<String>,
 	log_headers: Option<bool>,
+	server_ssl_trust: Option<String>,
+	server_ssl_key: Option<String>,
 }
 
 impl RawConfig {
@@ -28,6 +30,8 @@ impl RawConfig {
 			ssl_mode: Self::env_str("SSL_MODE"),
 			cafile: Self::env_str("CAFILE"),
 			log_headers: Self::env_bool("LOG_HEADERS"),
+			server_ssl_trust: Self::env_str("SERVER_SSL_TRUST"),
+			server_ssl_key: Self::env_str("SERVER_SSL_KEY"),
 		}
 	}
 
@@ -53,13 +57,15 @@ impl RawConfig {
 	}
 
 	fn merge(&mut self, other: RawConfig) {
-		self.remote = self.remote.as_ref().and(other.remote);
-		self.bind = self.bind.as_ref().and(other.bind);
-		self.rewrite_host = self.rewrite_host.as_ref().and(other.rewrite_host);
-		self.graceful_shutdown_timeout = self.graceful_shutdown_timeout.as_ref().and(other.graceful_shutdown_timeout);
-		self.ssl_mode = self.ssl_mode.as_ref().and(other.ssl_mode);
-		self.cafile = self.cafile.as_ref().and(other.cafile);
-		self.log_headers = self.log_headers.as_ref().and(other.log_headers);
+		self.remote = self.remote.take().or(other.remote);
+		self.bind = self.bind.take().or(other.bind);
+		self.rewrite_host = self.rewrite_host.take().or(other.rewrite_host);
+		self.graceful_shutdown_timeout = self.graceful_shutdown_timeout.take().or(other.graceful_shutdown_timeout);
+		self.ssl_mode = self.ssl_mode.take().or(other.ssl_mode);
+		self.cafile = self.cafile.take().or(other.cafile);
+		self.log_headers = self.log_headers.take().or(other.log_headers);
+		self.server_ssl_trust = self.server_ssl_trust.take().or(other.server_ssl_trust);
+		self.server_ssl_key = self.server_ssl_key.take().or(other.server_ssl_key);
 	}
 }
 
@@ -102,6 +108,8 @@ pub struct Config {
 	ssl_mode: SslMode,
 	cafile: Option<PathBuf>,
 	log_headers: bool,
+	server_ssl_trust: Option<PathBuf>,
+	server_ssl_key: Option<PathBuf>,
 }
 
 impl Config {
@@ -125,8 +133,10 @@ impl Config {
 			bind: Self::parse_bind(&raw_cfg),
 			graceful_shutdown_timeout: Self::parse_graceful_shutdown_timeout(&raw_cfg),
 			ssl_mode: Self::parse_ssl_mode(&raw_cfg),
-			cafile: Self::parse_cafile(&raw_cfg),
+			cafile: Self::parse_file(&raw_cfg.cafile),
 			log_headers: raw_cfg.log_headers.unwrap_or(false),
+			server_ssl_trust: Self::parse_file(&raw_cfg.server_ssl_trust),
+			server_ssl_key: Self::parse_file(&raw_cfg.server_ssl_key),
 		})
 	}
 
@@ -254,8 +264,8 @@ impl Config {
 		Duration::from_secs(10)
 	}
 
-	fn parse_cafile(rc: &RawConfig) -> Option<PathBuf> {
-		rc.cafile.as_ref().and_then(|v| Some(Path::new(v).to_path_buf()))
+	fn parse_file(value: &Option<String>) -> Option<PathBuf> {
+		value.as_ref().and_then(|v| Some(Path::new(v).to_path_buf()))
 	}
 
 	fn parse_ssl_mode(rc: &RawConfig) -> SslMode {
@@ -285,6 +295,18 @@ impl Config {
 	}
 	pub fn client_version(&self) -> HttpVersionMode {
 		HttpVersionMode::V1
+	}
+
+	pub fn server_ssl(&self) -> bool {
+		self.server_ssl_trust.is_some() && self.server_ssl_key.is_some()
+	}
+
+	pub fn get_server_ssl_cafile(&self) -> Option<PathBuf> {
+		self.server_ssl_trust.clone()
+	}
+
+	pub fn get_server_ssl_keyfile(&self) -> Option<PathBuf> {
+		self.server_ssl_key.clone()
 	}
 }
 

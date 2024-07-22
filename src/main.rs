@@ -12,7 +12,6 @@ use log::{info,warn,error};
 use core::task::{Context,Poll};
 use hyper::body::Frame;
 use tokio::io::{AsyncRead,AsyncWrite};
-use hyper::rt::{Read,Write};
 use core::marker::Unpin;
 use async_trait::async_trait;
 
@@ -86,7 +85,7 @@ impl Svc {
 	async fn connect(address: (String,u16), cfg: config::Config) -> Result<Box<dyn Stream>,String> {
 		if cfg.client_use_ssl() {
 			let stream = errmg!(TcpStream::connect(address).await)?;
-			let stream = ssl::wrap( stream, cfg ).await?;
+			let stream = ssl::wrap_client( stream, cfg ).await?;
 			Ok(Box::new(stream))
 		} else {
 			let stream = errmg!(TcpStream::connect(address).await)?;
@@ -211,23 +210,46 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
 	let graceful = hyper_util::server::graceful::GracefulShutdown::new();
 	let mut signal = std::pin::pin!(shutdown_signal());
+	let ssl = cfg.server_ssl();
+	let acceptor = if ssl {
+		match ssl::get_ssl_acceptor(cfg.clone()) {
+			Ok(v) => Some(v),
+			Err(e) => {
+				error!("{:?} at {} {}", e, file!(), line!());
+				None
+			}
+		}
+	} else { None };
 
 	let listener = TcpListener::bind(addr).await?;
-	info!("Listening on http://{}", addr);
+	info!("Listening on http{}://{}", if ssl { "s" } else { "" }, addr);
 	loop {
 		tokio::select! {
 			Ok((tcp, _addr)) = listener.accept() => {
-				let io = TokioIo::new(tcp);
-				let svc_clone = svc.clone();
-				let conn = http1::Builder::new()
-						.timer(TokioTimer::new())
-						.serve_connection(io, svc_clone);
-				let fut = graceful.watch(conn);
-				tokio::task::spawn(async move {
-					if let Err(err) = fut.await {
-						error!("Error serving connection: {:?}", err);
+				let tcp: Option<Box<dyn Stream>> = if let Some(acc) = acceptor.clone() {
+					match ssl::wrap_server(tcp, acc.clone()).await {
+						Ok(v) => Some(Box::new(v)),
+						Err(e) => {
+							error!("{:?} at {} {}", e, file!(), line!());
+							None
+						}
 					}
-				});
+				} else {
+					Some(Box::new(tcp))
+				};
+				if let Some(tcp) = tcp {
+					let io = TokioIo::new(tcp);
+					let svc_clone = svc.clone();
+					let conn = http1::Builder::new()
+							.timer(TokioTimer::new())
+							.serve_connection(io, svc_clone);
+					let fut = graceful.watch(conn);
+					tokio::task::spawn(async move {
+						if let Err(err) = fut.await {
+							error!("Error serving connection: {:?}", err);
+						}
+					});
+				}
 			},
 			_ = &mut signal => {
 				info!("graceful shutdown signal received");
