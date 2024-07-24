@@ -14,7 +14,11 @@ use hyper::body::Frame;
 use tokio::io::{AsyncRead,AsyncWrite};
 use core::marker::Unpin;
 use async_trait::async_trait;
+use std::time::Duration;
+use lazy_static::lazy_static;
+use pool::Pool;
 
+mod pool;
 mod config;
 mod ssl;
 mod logcfg;
@@ -35,6 +39,12 @@ macro_rules! keepalive {
 	}
 }
 
+macro_rules! config_socket {
+	($sock: expr) => {
+		$sock.set_linger(Some(Duration::from_secs(0))).unwrap_or_else(|err| { warn!("{}:{} Failed to set SO_LINGER on socket: {:?}", file!(), line!(), err); () });
+	}
+}
+
 enum GatewayBody {
 	Incoming(hyper::body::Incoming),
 	Empty,
@@ -51,12 +61,14 @@ impl hyper::body::Body for GatewayBody where {
 	}
 }
 
+#[async_trait]
 trait Stream : AsyncRead + AsyncWrite + Unpin + Send { }
 impl<T> Stream for T where T : AsyncRead + AsyncWrite + Unpin + Send { }
 
 #[async_trait]
 trait Sender : Send {
 	async fn send(&mut self, req: Request<GatewayBody>) -> hyper::Result<Response<Incoming>>;
+	async fn check(&mut self) -> bool;
 }
 
 #[async_trait]
@@ -64,13 +76,24 @@ impl Sender for hyper::client::conn::http1::SendRequest<GatewayBody> {
 	async fn send(&mut self, req: Request<GatewayBody>) -> hyper::Result<Response<Incoming>> {
 		self.send_request(req).await
 	}
+	async fn check(&mut self) -> bool {
+		self.ready().await.is_ok()
+	}
 }
 #[async_trait]
 impl Sender for hyper::client::conn::http2::SendRequest<GatewayBody> {
 	async fn send(&mut self, req: Request<GatewayBody>) -> hyper::Result<Response<Incoming>> {
 		self.send_request(req).await
 	}
+	async fn check(&mut self) -> bool {
+		self.ready().await.is_ok()
+	}
 }
+
+lazy_static! {
+	static ref STREAMS: Pool<Box<dyn Sender>> = Pool::new(10);
+}
+
 
 #[derive(Clone)]
 struct Svc {
@@ -85,10 +108,12 @@ impl Svc {
 	async fn connect(address: (String,u16), cfg: config::Config) -> Result<Box<dyn Stream>,String> {
 		if cfg.client_use_ssl() {
 			let stream = errmg!(TcpStream::connect(address).await)?;
+			config_socket!(stream);
 			let stream = ssl::wrap_client( stream, cfg ).await?;
 			Ok(Box::new(stream))
 		} else {
 			let stream = errmg!(TcpStream::connect(address).await)?;
+			config_socket!(stream);
 			Ok(Box::new(stream))
 		}
 	}
@@ -149,10 +174,30 @@ impl Svc {
 
 		let remote_request = errmg!(remote_request.body(req.into_body()))?;
 
-		let stream = errmg!(Self::connect(address, cfg.clone()).await)?;
-		let io = TokioIo::new( stream );
-		let mut sender = errmg!(Self::handshake(io, cfg.clone()).await)?;
-		errmg!(sender.send(remote_request.map(|v| GatewayBody::Incoming(v))).await)
+
+		let mut sender = STREAMS.get();
+
+		let mut sender = if let Some(mut pool) = STREAMS.get() {
+			if pool.check().await {
+				Some(pool)
+			} else {
+				None
+			}
+		} else {
+			None
+		};
+
+		let mut sender = if let Some(v) = sender {
+			v
+		} else {
+			let stream = errmg!(Self::connect(address, cfg.clone()).await)?;
+			let io = TokioIo::new( stream );
+			errmg!(Self::handshake(io, cfg.clone()).await)?
+		};
+
+		let rv = errmg!(sender.send(remote_request.map(|v| GatewayBody::Incoming(v))).await);
+		STREAMS.release(sender);
+		rv
 	}
 }
 
@@ -226,6 +271,7 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 	loop {
 		tokio::select! {
 			Ok((tcp, _addr)) = listener.accept() => {
+				config_socket!(tcp);
 				let tcp: Option<Box<dyn Stream>> = if let Some(acc) = acceptor.clone() {
 					match ssl::wrap_server(tcp, acc.clone()).await {
 						Ok(v) => Some(Box::new(v)),
