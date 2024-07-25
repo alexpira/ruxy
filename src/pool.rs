@@ -1,5 +1,8 @@
 use std::sync::Mutex;
 use log::warn;
+use lazy_static::lazy_static;
+
+use crate::net::Sender;
 
 pub struct Pool<T> where T: Send {
 	data: Mutex<Vec<T>>,
@@ -68,4 +71,18 @@ impl<T: Send> Pool<T> {
 		}
 	}
 }
+
+lazy_static! {
+	pub static ref REMOTE_CONN_POOL: Pool<Box<dyn Sender>> = Pool::new(10);
+}
+
+macro_rules! remote_pool_get {
+	() => { crate::pool::REMOTE_CONN_POOL.get() }
+}
+pub(crate) use remote_pool_get;
+
+macro_rules! remote_pool_release {
+	($sender: expr) => { crate::pool::REMOTE_CONN_POOL.release($sender) }
+}
+pub(crate) use remote_pool_release;
 
