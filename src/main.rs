@@ -45,19 +45,87 @@ macro_rules! config_socket {
 	}
 }
 
-enum GatewayBody {
-	Incoming(hyper::body::Incoming),
-	Empty,
+struct GatewayBody {
+	incoming: Option<Incoming>,
+	save_payload: bool,
+	frames: Vec<hyper::body::Bytes>,
 }
-impl hyper::body::Body for GatewayBody where {
+impl GatewayBody {
+	pub fn empty() -> GatewayBody {
+		GatewayBody {
+			incoming: None,
+			frames: Vec::new(),
+			save_payload: false,
+		}
+	}
+	pub fn wrap(inner: Incoming) -> GatewayBody {
+		GatewayBody {
+			incoming: Some(inner),
+			frames: Vec::new(),
+			save_payload: false,
+		}
+	}
+
+	pub fn log_payload(&mut self, value: bool) {
+		self.save_payload = value;
+	}
+
+	fn add_frame(&mut self, frame: &hyper::body::Bytes) {
+		if self.save_payload {
+			self.frames.push(frame.clone());
+		}
+	}
+
+	fn end(&self) {
+		if self.save_payload {
+			let log = String::from_utf8(self.frames.clone().concat()).unwrap_or("DECODE-ERROR".to_string());
+			info!("BODY: {}", log);
+		}
+	}
+}
+
+impl hyper::body::Body for GatewayBody {
 	type Data = hyper::body::Bytes;
 	type Error = hyper::Error;
 
-	fn poll_frame( self: Pin<&mut Self>, cx: &mut Context<'_>,) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
-		match &mut *self.get_mut(){
-			Self::Incoming(incoming) => Pin::new(incoming).poll_frame(cx),
-			Self::Empty => Poll::Ready(None)
+	fn poll_frame(mut self: Pin<&mut Self>, cx: &mut Context<'_>,) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+		let me = &mut *self.as_mut().get_mut();
+
+		let poll = match me.incoming.as_mut() {
+			None => {
+				me.end();
+				return Poll::Ready(None);
+			},
+			Some(wrp) => {
+				Pin::new(wrp).poll_frame(cx)
+			},
+		};
+		let vopt = core::task::ready!(poll);
+
+		if vopt.is_none() {
+			me.end();
+			return Poll::Ready(None);
 		}
+		match vopt.unwrap() {
+			Err(e) => Poll::Ready(Some(Err(e))),
+			Ok(frm) => {
+				if let Some(data) = frm.data_ref() {
+					me.add_frame(data);
+				}
+				Poll::Ready(Some(Ok(frm)))
+			},
+		}
+	}
+
+	fn is_end_stream(&self) -> bool {
+		let rv = match &self.incoming {
+			None => true,
+			Some(wrp) => wrp.is_end_stream(),
+		};
+		if rv {
+			self.end();
+		}
+		rv
 	}
 }
 
@@ -143,7 +211,7 @@ impl Svc {
 	}
 
 
-	async fn forward(cfg: config::Config, req: Request<Incoming>) -> Result<Response<Incoming>,String> {
+	async fn forward(cfg: config::Config, req: Request<GatewayBody>) -> Result<Response<Incoming>,String> {
 		let hdrs = req.headers();
 
 		let mut remote_request = Request::builder()
@@ -174,7 +242,6 @@ impl Svc {
 
 		let remote_request = errmg!(remote_request.body(req.into_body()))?;
 
-
 		let sender = if let Some(mut pool) = STREAMS.get() {
 			if pool.check().await {
 				Some(pool)
@@ -193,7 +260,7 @@ impl Svc {
 			errmg!(Self::handshake(io, cfg.clone()).await)?
 		};
 
-		let rv = errmg!(sender.send(remote_request.map(|v| GatewayBody::Incoming(v))).await);
+		let rv = errmg!(sender.send(remote_request).await);
 		STREAMS.release(sender);
 		rv
 	}
@@ -205,26 +272,32 @@ impl Service<Request<Incoming>> for Svc {
 	type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
 	fn call(&self, req: Request<Incoming>) -> Self::Future {
-		let uri = req.uri();
-
-		info!("REQUEST {} {} {}", req.method(), uri.path(), uri.query().unwrap_or("-"));
-
-		let loghdr = self.cfg.log_headers();
 		let cfg = self.cfg.clone();
 		Box::pin(async move {
+			let uri = req.uri();
+
+			info!("REQUEST {} {} {}", req.method(), uri.path(), uri.query().unwrap_or("-"));
+
+			let req = req.map(|v| {
+				let mut body = GatewayBody::wrap(v);
+				body.log_payload(cfg.log_request_body());
+				body
+			});
+
+			let log_headers = cfg.log_headers();
 			match Self::forward(cfg, req).await {
 				Ok(remote_resp) => {
-					if loghdr {
+					if log_headers {
 						remote_resp.headers().iter().for_each(|(k,v)| info!(" <- {:?}: {:?}", k, v));
 					}
 
-					Ok(remote_resp.map(|v| GatewayBody::Incoming(v)))
+					Ok(remote_resp.map(|v| GatewayBody::wrap(v)))
 				},
 				Err(e) => {
 					error!("Call forward failed: {:?}", e);
 					errmg!(Response::builder()
 						.status(502)
-						.body(GatewayBody::Empty))
+						.body(GatewayBody::empty()))
 				}
 			}
 		})

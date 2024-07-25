@@ -16,6 +16,7 @@ struct RawConfig {
 	ssl_mode: Option<String>,
 	cafile: Option<String>,
 	log_headers: Option<bool>,
+	log_request_body: Option<bool>,
 	server_ssl_trust: Option<String>,
 	server_ssl_key: Option<String>,
 }
@@ -30,6 +31,7 @@ impl RawConfig {
 			ssl_mode: Self::env_str("SSL_MODE"),
 			cafile: Self::env_str("CAFILE"),
 			log_headers: Self::env_bool("LOG_HEADERS"),
+			log_request_body: Self::env_bool("LOG_REQUEST_BODY"),
 			server_ssl_trust: Self::env_str("SERVER_SSL_TRUST"),
 			server_ssl_key: Self::env_str("SERVER_SSL_KEY"),
 		}
@@ -64,6 +66,7 @@ impl RawConfig {
 		self.ssl_mode = self.ssl_mode.take().or(other.ssl_mode);
 		self.cafile = self.cafile.take().or(other.cafile);
 		self.log_headers = self.log_headers.take().or(other.log_headers);
+		self.log_request_body = self.log_request_body.take().or(other.log_request_body);
 		self.server_ssl_trust = self.server_ssl_trust.take().or(other.server_ssl_trust);
 		self.server_ssl_key = self.server_ssl_key.take().or(other.server_ssl_key);
 	}
@@ -108,6 +111,7 @@ pub struct Config {
 	ssl_mode: SslMode,
 	cafile: Option<PathBuf>,
 	log_headers: bool,
+	log_request_body: bool,
 	server_ssl_trust: Option<PathBuf>,
 	server_ssl_key: Option<PathBuf>,
 }
@@ -135,6 +139,7 @@ impl Config {
 			ssl_mode: Self::parse_ssl_mode(&raw_cfg),
 			cafile: Self::parse_file(&raw_cfg.cafile),
 			log_headers: raw_cfg.log_headers.unwrap_or(false),
+			log_request_body: raw_cfg.log_request_body.unwrap_or(false),
 			server_ssl_trust: Self::parse_file(&raw_cfg.server_ssl_trust),
 			server_ssl_key: Self::parse_file(&raw_cfg.server_ssl_key),
 		})
@@ -174,6 +179,10 @@ impl Config {
 
 	pub fn log_headers(&self) -> bool {
 		self.log_headers
+	}
+
+	pub fn log_request_body(&self) -> bool {
+		self.log_request_body
 	}
 
 	fn default_port(rc: &RawConfig) -> u16 {
