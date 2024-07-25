@@ -64,7 +64,7 @@ impl ConfigFilter {
 			None => true,
 			Some(rexp) => {
 				let pstr = path.path();
-				rexp.is_match_at(&pstr, 0)
+				rexp.is_match(&pstr)
 			}
 		}
 	}
