@@ -1,8 +1,7 @@
 
 bind = "localhost:8080"
-remote = "https://localhost:8000/"
+remote = "http://localhost:8000/"
 rewrite_host = true
-log_headers = true
 
 # ssl_mode = "os"
 
@@ -13,6 +12,11 @@ ssl_mode = "dangerous"
 
 graceful_shutdown_timeout = "2sec"
 
-server_ssl_trust = "./test-server/cert.pem"
-server_ssl_key = "./test-server/key.pem"
+# server_ssl_trust = "./test-server/cert.pem"
+# server_ssl_key = "./test-server/key.pem"
+
+[filters]
+f1 = { path = "/test$", method = "GET", log_headers = true }
+f2 = { path = "/test2/.*", log_headers = true }
+f3 = { method = "POST", log_request_body = true }
 

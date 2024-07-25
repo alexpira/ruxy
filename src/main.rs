@@ -99,7 +99,7 @@ impl Svc {
 
 		let mut host_done = false;
 		for (key, value) in hdrs.iter() {
-			if cfg.log_headers() {
+			if cfg.log_headers(req.method(), req.uri()) {
 				info!(" -> {:?}: {:?}", key, value);
 			}
 			if key == "host" {
@@ -153,17 +153,18 @@ impl Service<Request<Incoming>> for Svc {
 	fn call(&self, req: Request<Incoming>) -> Self::Future {
 		let cfg = self.cfg.clone();
 		Box::pin(async move {
-			let uri = req.uri();
+			let uri = req.uri().clone();
+			let method = req.method().clone();
 
-			info!("REQUEST {} {} {}", req.method(), uri.path(), uri.query().unwrap_or("-"));
+			info!("REQUEST {} {} {}", method, uri.path(), uri.query().unwrap_or("-"));
 
 			let req = req.map(|v| {
 				let mut body = GatewayBody::wrap(v);
-				body.log_payload(cfg.log_request_body());
+				body.log_payload(cfg.log_request_body(&method, &uri));
 				body
 			});
 
-			let log_headers = cfg.log_headers();
+			let log_headers = cfg.log_headers(req.method(), req.uri());
 			match Self::forward(cfg, req).await {
 				Ok(remote_resp) => {
 					if log_headers {
@@ -193,8 +194,17 @@ async fn shutdown_signal() {
 #[tokio::main]
 pub async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 	logcfg::init_logging();
+	let args: Vec<String> = std::env::args().collect();
 
-	let cfg = match config::Config::load("config.toml") {
+	let mut cfile = "config.toml";
+	if args.len() > 2 {
+		if args[1].eq("-f") {
+			cfile = &args[2];
+		}
+	}
+
+	info!("Looking for configuration file {}", cfile);
+	let cfg = match config::Config::load(cfile) {
 		Ok(v) => v,
 		Err(e) => panic!("{}", e)
 	};

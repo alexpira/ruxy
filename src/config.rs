@@ -4,6 +4,8 @@ use std::{fs,error::Error};
 use serde::Deserialize;
 use std::time::Duration;
 use std::net::{ToSocketAddrs, SocketAddr};
+use hyper::{Method,Uri};
+use regex::Regex;
 use std::env;
 use log::warn;
 
@@ -19,6 +21,53 @@ struct RawConfig {
 	log_request_body: Option<bool>,
 	server_ssl_trust: Option<String>,
 	server_ssl_key: Option<String>,
+	filters: Option<toml::Table>,
+}
+
+#[derive(Clone)]
+struct ConfigFilter {
+	path: Option<Regex>,
+	method: Option<String>,
+	log_headers: Option<bool>,
+	log_request_body: Option<bool>,
+}
+
+impl ConfigFilter {
+	fn parse(v: &toml::Value) -> Option<ConfigFilter> {
+		match v {
+			toml::Value::Table(t) => Some(ConfigFilter {
+				path: t.get("path")
+					.and_then(|v| v.as_str())
+					.and_then(|v| match Regex::new(v) {
+						Ok(r) => Some(r),
+						Err(e) => {
+							warn!("Invalid path regex in configuration \"{}\": {:?}", v, e);
+							None
+						},
+					}),
+				method: t.get("method").and_then(|v| v.as_str()).and_then(|v| Some(v.to_string())),
+				log_headers: t.get("log_headers").and_then(|v| v.as_bool()),
+				log_request_body: t.get("log_request_body").and_then(|v| v.as_bool()),
+			}),
+			_ => None,
+		}
+	}
+
+	fn matches(&self, method: &Method, path: &Uri) -> bool {
+		if let Some(m) = self.method.as_ref() {
+			if !m.eq_ignore_ascii_case(method.as_ref()) {
+				return false;
+			}
+		}
+
+		match self.path.as_ref() {
+			None => true,
+			Some(rexp) => {
+				let pstr = path.path();
+				rexp.is_match_at(&pstr, 0)
+			}
+		}
+	}
 }
 
 impl RawConfig {
@@ -34,6 +83,7 @@ impl RawConfig {
 			log_request_body: Self::env_bool("LOG_REQUEST_BODY"),
 			server_ssl_trust: Self::env_str("SERVER_SSL_TRUST"),
 			server_ssl_key: Self::env_str("SERVER_SSL_KEY"),
+			filters: None,
 		}
 	}
 
@@ -69,6 +119,21 @@ impl RawConfig {
 		self.log_request_body = self.log_request_body.take().or(other.log_request_body);
 		self.server_ssl_trust = self.server_ssl_trust.take().or(other.server_ssl_trust);
 		self.server_ssl_key = self.server_ssl_key.take().or(other.server_ssl_key);
+		self.filters = self.filters.take().or(other.filters);
+	}
+
+	fn get_filters(&self) -> Vec<ConfigFilter> {
+		if self.filters.is_none() {
+			return Vec::new();
+		}
+
+		let mut rv = Vec::new();
+		for v in self.filters.as_ref().unwrap().values() {
+			if let Some(cf) = ConfigFilter::parse(v) {
+				rv.push(cf);
+			}
+		}
+		return rv;
 	}
 }
 
@@ -114,6 +179,7 @@ pub struct Config {
 	log_request_body: bool,
 	server_ssl_trust: Option<PathBuf>,
 	server_ssl_key: Option<PathBuf>,
+	filters: Vec<ConfigFilter>,
 }
 
 impl Config {
@@ -142,6 +208,7 @@ impl Config {
 			log_request_body: raw_cfg.log_request_body.unwrap_or(false),
 			server_ssl_trust: Self::parse_file(&raw_cfg.server_ssl_trust),
 			server_ssl_key: Self::parse_file(&raw_cfg.server_ssl_key),
+			filters: raw_cfg.get_filters(),
 		})
 	}
 
@@ -177,11 +244,25 @@ impl Config {
 		self.bind
 	}
 
-	pub fn log_headers(&self) -> bool {
+	pub fn log_headers(&self, method: &Method, path: &Uri) -> bool {
+		for f in self.filters.iter() {
+			if f.matches(method, path) {
+				if let Some(v) = f.log_headers {
+					return v;
+				}
+			}
+		}
 		self.log_headers
 	}
 
-	pub fn log_request_body(&self) -> bool {
+	pub fn log_request_body(&self, method: &Method, path: &Uri) -> bool {
+		for f in self.filters.iter() {
+			if f.matches(method, path) {
+				if let Some(v) = f.log_request_body {
+					return v;
+				}
+			}
+		}
 		self.log_request_body
 	}
 
