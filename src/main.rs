@@ -175,9 +175,7 @@ impl Svc {
 		let remote_request = errmg!(remote_request.body(req.into_body()))?;
 
 
-		let mut sender = STREAMS.get();
-
-		let mut sender = if let Some(mut pool) = STREAMS.get() {
+		let sender = if let Some(mut pool) = STREAMS.get() {
 			if pool.check().await {
 				Some(pool)
 			} else {
