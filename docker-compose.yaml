@@ -1,0 +1,12 @@
+version: '2'
+services:
+  app:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - ${PWD}/config.toml:/data/config.toml
+    environment:
+      OPTS: -f /data/config.toml
+      BIND: 0.0.0.0:8080
+

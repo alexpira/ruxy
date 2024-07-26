@@ -18,5 +18,5 @@ USER ruxer
 ENV BIND="0.0.0.0:8080"
 EXPOSE 8080
 
-CMD ["/ruxy"]
+CMD /ruxy ${OPTS}
 
