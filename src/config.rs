@@ -1,13 +1,88 @@
 
 use std::path::{Path,PathBuf};
-use std::{fs,error::Error};
+use std::{fs,env,error::Error,collections::HashMap};
 use serde::Deserialize;
 use std::time::Duration;
 use std::net::{ToSocketAddrs, SocketAddr};
-use hyper::{Method,Uri};
+use hyper::{Method,Uri,header::HeaderMap};
 use regex::Regex;
-use std::env;
 use log::warn;
+
+#[derive(Clone)]
+pub struct RemoteConfig {
+	address: (String, u16),
+	raw: String,
+	domain: String,
+	ssl: bool,
+}
+
+impl RemoteConfig {
+	fn build(remote: &str) -> RemoteConfig {
+		RemoteConfig {
+			address: Self::parse_remote(&remote),
+			raw: Self::extract_remote_host_def(&remote),
+			domain: Self::parse_remote_domain(&remote),
+			ssl: Self::parse_remote_ssl(&remote),
+		}
+	}
+
+	pub fn address(&self) -> (String,u16) {
+		self.address.clone()
+	}
+	pub fn raw(&self) -> String {
+		self.raw.clone()
+	}
+	pub fn domain(&self) -> String {
+		self.domain.clone()
+	}
+	pub fn ssl(&self) -> bool {
+		self.ssl
+	}
+
+	fn extract_remote_host_def(remote: &str) -> String {
+		let mut def = remote.to_string();
+		if let Some(proto_split) = def.find("://") {
+			def = def[proto_split+3..].to_string();
+		}
+		if let Some(path_split) = def.find("/") {
+			def = def[..path_split].to_string();
+		}
+		if let Some(auth_split) = def.find("@") {
+			def = def[auth_split+1..].to_string();
+		}
+		def
+	}
+
+	fn parse_remote_domain(remote: &str) -> String {
+		let def = Self::extract_remote_host_def(remote);
+		if let Some(port_split) = def.find(":") {
+			def[..port_split].to_string()
+		} else {
+			def
+		}
+	}
+
+	fn default_port(remote: &str) -> u16 {
+		let def = remote.to_lowercase();
+		if def.starts_with("https://") { 443 } else { 80 }
+	}
+
+	fn parse_remote(remote: &str) -> (String,u16) {
+		let def = Self::extract_remote_host_def(remote);
+		if let Some(port_split) = def.find(":") {
+			let host = def[..port_split].to_string();
+			let port = def[port_split+1..].parse::<u16>().unwrap_or(Self::default_port(remote));
+			(host, port)
+		} else {
+			(def, Self::default_port(remote))
+		}
+	}
+
+	fn parse_remote_ssl(remote: &str) -> bool {
+		let def = remote.to_lowercase();
+		def.starts_with("https://")
+	}
+}
 
 #[derive(Deserialize)]
 struct RawConfig {
@@ -28,11 +103,37 @@ struct RawConfig {
 struct ConfigFilter {
 	path: Option<Regex>,
 	method: Option<String>,
+	headers: Option<HashMap<String,Regex>>,
+
+	remote: Option<RemoteConfig>,
+	rewrite_host: Option<bool>,
 	log_headers: Option<bool>,
 	log_request_body: Option<bool>,
 }
 
 impl ConfigFilter {
+	fn parse_headers(v: &toml::Value) -> Option<HashMap<String,Regex>> {
+		match v {
+			toml::Value::Table(t) => {
+				let mut parsed = HashMap::<String,Regex>::new();
+				for k in t.keys() {
+					if let Some(value) = t.get(k).and_then(|v| v.as_str()) {
+						match Regex::new(value) {
+							Ok(r) => { parsed.insert(k.to_lowercase(), r); },
+							Err(e) => warn!("Invalid path regex in configuration \"{}\": {:?}", v, e),
+						}
+					}
+				}
+				if parsed.is_empty() {
+					None
+				} else {
+					Some(parsed)
+				}
+			}
+			_ => None
+		}
+	}
+
 	fn parse(v: &toml::Value) -> Option<ConfigFilter> {
 		match v {
 			toml::Value::Table(t) => Some(ConfigFilter {
@@ -46,6 +147,10 @@ impl ConfigFilter {
 						},
 					}),
 				method: t.get("method").and_then(|v| v.as_str()).and_then(|v| Some(v.to_string())),
+				headers: t.get("headers").and_then(|v| Self::parse_headers(v)),
+
+				remote: t.get("remote").and_then(|v| v.as_str()).and_then(|v| Some(RemoteConfig::build(v))),
+				rewrite_host: t.get("rewrite_host").and_then(|v| v.as_bool()),
 				log_headers: t.get("log_headers").and_then(|v| v.as_bool()),
 				log_request_body: t.get("log_request_body").and_then(|v| v.as_bool()),
 			}),
@@ -53,20 +158,48 @@ impl ConfigFilter {
 		}
 	}
 
-	fn matches(&self, method: &Method, path: &Uri) -> bool {
+	fn has_remote(&self) -> bool {
+		self.remote.is_some()
+	}
+
+	fn get_remote(&self) -> Option<RemoteConfig> {
+		self.remote.clone()
+	}
+
+	fn matches(&self, method: &Method, path: &Uri, headers: &HeaderMap) -> bool {
 		if let Some(m) = self.method.as_ref() {
 			if !m.eq_ignore_ascii_case(method.as_ref()) {
 				return false;
 			}
 		}
 
-		match self.path.as_ref() {
-			None => true,
-			Some(rexp) => {
-				let pstr = path.path();
-				rexp.is_match(&pstr)
+		if let Some(rexp) = self.path.as_ref() {
+			let pstr = path.path();
+			if !rexp.is_match(&pstr) {
+				return false;
 			}
 		}
+
+		if let Some(hdrs) = self.headers.as_ref() {
+			for k in hdrs.keys() {
+				let mut ok = false;
+				if let Some(rexp) = hdrs.get(k) {
+					for hdr in headers.get_all(k) {
+						if let Ok(hdrstr) = hdr.to_str() {
+							if rexp.is_match(hdrstr) {
+								ok = true;
+								break;
+							}
+						}
+					}
+				}
+				if !ok {
+					return false;
+				}
+			}
+		}
+
+		true
 	}
 }
 
@@ -164,21 +297,20 @@ impl std::fmt::Display for HttpVersionMode {
     }
 }
 
-
 #[derive(Clone)]
 pub struct Config {
-	remote: (String, u16),
-	remote_domain_raw: String,
-	remote_ssl: bool,
-	rewrite_host: Option<String>,
-	bind: SocketAddr,
-	graceful_shutdown_timeout: Duration,
+	remote: RemoteConfig,
+	rewrite_host: bool,
 	ssl_mode: SslMode,
-	cafile: Option<PathBuf>,
 	log_headers: bool,
 	log_request_body: bool,
+	cafile: Option<PathBuf>,
+
+	bind: SocketAddr,
+	graceful_shutdown_timeout: Duration,
 	server_ssl_trust: Option<PathBuf>,
 	server_ssl_key: Option<PathBuf>,
+
 	filters: Vec<ConfigFilter>,
 }
 
@@ -195,11 +327,11 @@ impl Config {
 			raw_cfg.merge(file_cfg);
 		}
 
+		let remote = raw_cfg.remote.as_ref().expect("Missing main remote host in configuration");
+
 		Ok(Config {
-			remote: Self::parse_remote(&raw_cfg),
-			remote_domain_raw: Self::parse_remote_domain(&raw_cfg),
-			remote_ssl: Self::parse_remote_ssl(&raw_cfg),
-			rewrite_host: Self::parse_rewrite_host(&raw_cfg),
+			remote: RemoteConfig::build(remote),
+			rewrite_host: raw_cfg.rewrite_host.unwrap_or(false),
 			bind: Self::parse_bind(&raw_cfg),
 			graceful_shutdown_timeout: Self::parse_graceful_shutdown_timeout(&raw_cfg),
 			ssl_mode: Self::parse_ssl_mode(&raw_cfg),
@@ -212,6 +344,16 @@ impl Config {
 		})
 	}
 
+	fn get_filters<'a>(&'a self, method: &Method, path: &Uri, headers: &HeaderMap) -> Vec<&'a ConfigFilter> {
+		let mut rv = Vec::new();
+		for f in self.filters.iter() {
+			if f.matches(method, path, headers) {
+				rv.push(f);
+			}
+		}
+		rv
+	}
+
 	pub fn get_ssl_mode(&self) -> SslMode {
 		self.ssl_mode
 	}
@@ -220,101 +362,46 @@ impl Config {
 		self.cafile.clone()
 	}
 
-	pub fn client_use_ssl(&self) -> bool {
-		self.remote_ssl
-	}
+	pub fn get_rewrite_host(&self, method: &Method, path: &Uri, headers: &HeaderMap) -> Option<String> {
+		let rewrite = self.get_filters(method, path, headers)
+			.iter().find(|v| v.rewrite_host.is_some())
+			.and_then(|f| f.rewrite_host)
+			.unwrap_or(self.rewrite_host);
 
-	pub fn get_domain(&self) -> String {
-		self.remote_domain_raw.clone()
-	}
+		if !rewrite {
+			return None;
+		}
 
-	pub fn get_rewrite_host(&self) -> Option<String> {
-		self.rewrite_host.clone()
+		Some( self.get_remote(method, path, headers).raw() )
 	}
 
 	pub fn get_graceful_shutdown_timeout(&self) -> Duration {
 		self.graceful_shutdown_timeout
 	}
 
-	pub fn get_remote(&self) -> (String,u16) {
-		self.remote.clone()
+	pub fn get_remote(&self, method: &Method, path: &Uri, headers: &HeaderMap) -> RemoteConfig {
+		self.get_filters(method, path, headers)
+			.iter().find(|v| v.has_remote())
+			.and_then(|f| f.get_remote())
+			.unwrap_or(self.remote.clone())
 	}
 
 	pub fn get_bind(&self) -> SocketAddr {
 		self.bind
 	}
 
-	pub fn log_headers(&self, method: &Method, path: &Uri) -> bool {
-		for f in self.filters.iter() {
-			if f.matches(method, path) {
-				if let Some(v) = f.log_headers {
-					return v;
-				}
-			}
-		}
-		self.log_headers
+	pub fn log_headers(&self, method: &Method, path: &Uri, headers: &HeaderMap) -> bool {
+		self.get_filters(method, path, headers)
+			.iter().find(|v| v.log_headers.is_some())
+			.and_then(|f| f.log_headers)
+			.unwrap_or(self.log_headers)
 	}
 
-	pub fn log_request_body(&self, method: &Method, path: &Uri) -> bool {
-		for f in self.filters.iter() {
-			if f.matches(method, path) {
-				if let Some(v) = f.log_request_body {
-					return v;
-				}
-			}
-		}
-		self.log_request_body
-	}
-
-	fn default_port(rc: &RawConfig) -> u16 {
-		let def = rc.remote.clone().expect("Missing remote host in configuration").to_lowercase();
-		if def.starts_with("https://") { 443 } else { 80 }
-	}
-
-	fn extract_remote_host_def(rc: &RawConfig) -> String {
-		let mut def = rc.remote.clone().expect("Missing remote host in configuration");
-		if let Some(proto_split) = def.find("://") {
-			def = def[proto_split+3..].to_string();
-		}
-		if let Some(path_split) = def.find("/") {
-			def = def[..path_split].to_string();
-		}
-		if let Some(auth_split) = def.find("@") {
-			def = def[auth_split+1..].to_string();
-		}
-		def
-	}
-
-	fn parse_remote_domain(rc: &RawConfig) -> String {
-		let def = Self::extract_remote_host_def(rc);
-		if let Some(port_split) = def.find(":") {
-			def[..port_split].to_string()
-		} else {
-			def
-		}
-	}
-
-	fn parse_rewrite_host(rc: &RawConfig) -> Option<String> {
-		if !rc.rewrite_host.unwrap_or(false) {
-			return None;
-		}
-		Some(Self::extract_remote_host_def(rc))
-	}
-
-	fn parse_remote(rc: &RawConfig) -> (String,u16) {
-		let def = Self::extract_remote_host_def(rc);
-		if let Some(port_split) = def.find(":") {
-			let host = def[..port_split].to_string();
-			let port = def[port_split+1..].parse::<u16>().unwrap_or(Self::default_port(rc));
-			(host, port)
-		} else {
-			(def, Self::default_port(rc))
-		}
-	}
-
-	fn parse_remote_ssl(rc: &RawConfig) -> bool {
-		let def = rc.remote.clone().expect("Missing remote host in configuration").to_lowercase();
-		def.starts_with("https://")
+	pub fn log_request_body(&self, method: &Method, path: &Uri, headers: &HeaderMap) -> bool {
+		self.get_filters(method, path, headers)
+			.iter().find(|v| v.log_request_body.is_some())
+			.and_then(|f| f.log_request_body)
+			.unwrap_or(self.log_request_body)
 	}
 
 	fn parse_bind(rc: &RawConfig) -> SocketAddr {

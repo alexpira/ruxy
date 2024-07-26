@@ -11,7 +11,7 @@ use log::{warn,error};
 use rustls::{Error,SignatureScheme,DigitallySignedStruct};
 use rustls::client::danger::{ServerCertVerifier,ServerCertVerified,HandshakeSignatureValid};
 
-use crate::config::{Config,SslMode,HttpVersionMode};
+use crate::config::{Config,RemoteConfig,SslMode,HttpVersionMode};
 
 #[derive(Debug)]
 struct SslCertValidationDisabler { }
@@ -156,11 +156,11 @@ fn build_client_ssl_config(cfg: &Config) -> rustls::ClientConfig {
 	config
 }
 
-pub async fn wrap_client(stream: TcpStream, cfg: Config) -> Result<tokio_rustls::client::TlsStream<TcpStream>,String> {
-	let config = build_client_ssl_config(&cfg);
+pub async fn wrap_client(stream: TcpStream, cfg: &Config, remote: &RemoteConfig) -> Result<tokio_rustls::client::TlsStream<TcpStream>,String> {
+	let config = build_client_ssl_config(cfg);
 	let connector = TlsConnector::from(Arc::new(config));
 
-	let domain_name = cfg.get_domain();
+	let domain_name = remote.domain();
 	let domain = match ServerName::try_from(domain_name.clone())
 		.map_err(|_| format!("{}:{} invalid dnsname: {}", file!(), line!(), domain_name)) {
 		Ok(v) => v.to_owned(),

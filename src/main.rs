@@ -11,7 +11,7 @@ use tokio::signal::unix::{signal, SignalKind};
 use log::{info,warn,error};
 use std::time::Duration;
 
-use pool::{remote_pool_get,remote_pool_release};
+use pool::{remote_pool_key,remote_pool_get,remote_pool_release};
 use net::{Stream,Sender,GatewayBody};
 
 mod pool;
@@ -52,11 +52,11 @@ impl Svc {
 		Self { cfg }
 	}
 
-	async fn connect(address: (String,u16), cfg: config::Config) -> Result<Box<dyn Stream>,String> {
-		if cfg.client_use_ssl() {
+	async fn connect(address: (String,u16), cfg: &config::Config, remote: &config::RemoteConfig) -> Result<Box<dyn Stream>,String> {
+		if remote.ssl() {
 			let stream = errmg!(TcpStream::connect(address).await)?;
 			config_socket!(stream);
-			let stream = ssl::wrap_client( stream, cfg ).await?;
+			let stream = ssl::wrap_client( stream, cfg, remote ).await?;
 			Ok(Box::new(stream))
 		} else {
 			let stream = errmg!(TcpStream::connect(address).await)?;
@@ -99,11 +99,11 @@ impl Svc {
 
 		let mut host_done = false;
 		for (key, value) in hdrs.iter() {
-			if cfg.log_headers(req.method(), req.uri()) {
+			if cfg.log_headers(req.method(), req.uri(), req.headers()) {
 				info!(" -> {:?}: {:?}", key, value);
 			}
 			if key == "host" {
-				if let Some(repl) = cfg.get_rewrite_host() {
+				if let Some(repl) = cfg.get_rewrite_host(req.method(), req.uri(), req.headers()) {
 					remote_request = remote_request.header(key, repl);
 					host_done = true;
 					continue;
@@ -112,16 +112,18 @@ impl Svc {
 			remote_request = remote_request.header(key, value);
 		}
 		if !host_done {
-			if let Some(repl) = cfg.get_rewrite_host() {
+			if let Some(repl) = cfg.get_rewrite_host(req.method(), req.uri(), req.headers()) {
 				remote_request = remote_request.header("host", repl);
 			}
 		}
 
-		let address = cfg.get_remote();
+		let remote = cfg.get_remote(req.method(), req.uri(), req.headers());
+		let address = remote.address();
+		let conn_pool_key = remote_pool_key!(address);
 
 		let remote_request = errmg!(remote_request.body(req.into_body()))?;
 
-		let sender = if let Some(mut pool) = remote_pool_get!() {
+		let sender = if let Some(mut pool) = remote_pool_get!(&conn_pool_key) {
 			if pool.check().await {
 				Some(pool)
 			} else {
@@ -134,13 +136,13 @@ impl Svc {
 		let mut sender = if let Some(v) = sender {
 			v
 		} else {
-			let stream = errmg!(Self::connect(address, cfg.clone()).await)?;
+			let stream = errmg!(Self::connect(address, &cfg, &remote).await)?;
 			let io = TokioIo::new( stream );
 			errmg!(Self::handshake(io, cfg.clone()).await)?
 		};
 
 		let rv = errmg!(sender.send(remote_request).await);
-		remote_pool_release!(sender);
+		remote_pool_release!(&conn_pool_key, sender);
 		rv
 	}
 }
@@ -155,16 +157,17 @@ impl Service<Request<Incoming>> for Svc {
 		Box::pin(async move {
 			let uri = req.uri().clone();
 			let method = req.method().clone();
+			let headers = req.headers().clone();
 
 			info!("REQUEST {} {} {}", method, uri.path(), uri.query().unwrap_or("-"));
 
 			let req = req.map(|v| {
 				let mut body = GatewayBody::wrap(v);
-				body.log_payload(cfg.log_request_body(&method, &uri));
+				body.log_payload(cfg.log_request_body(&method, &uri, &headers));
 				body
 			});
 
-			let log_headers = cfg.log_headers(req.method(), req.uri());
+			let log_headers = cfg.log_headers(&method, &uri, &headers);
 			match Self::forward(cfg, req).await {
 				Ok(remote_resp) => {
 					if log_headers {
