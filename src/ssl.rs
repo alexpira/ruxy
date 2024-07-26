@@ -11,7 +11,7 @@ use log::{warn,error};
 use rustls::{Error,SignatureScheme,DigitallySignedStruct};
 use rustls::client::danger::{ServerCertVerifier,ServerCertVerified,HandshakeSignatureValid};
 
-use crate::config::{Config,RemoteConfig,SslMode,HttpVersionMode};
+use crate::config::{Config,RemoteConfig,SslMode,HttpVersionMode,SslData};
 
 #[derive(Debug)]
 struct SslCertValidationDisabler { }
@@ -99,10 +99,10 @@ fn load_private_key(filename: PathBuf) -> Result<PrivateKeyDer<'static>, String>
 	}
 }
 
-fn build_client_ssl_config(cfg: &Config) -> rustls::ClientConfig {
+fn build_client_ssl_config(cfg: SslData) -> rustls::ClientConfig {
 	let config = rustls::ClientConfig::builder();
 
-	let mut config = match cfg.get_ssl_mode() {
+	let mut config = match cfg.0 {
 		SslMode::Builtin => {
 			let mut root_cert_store = rustls::RootCertStore::empty();
 			root_cert_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
@@ -112,7 +112,7 @@ fn build_client_ssl_config(cfg: &Config) -> rustls::ClientConfig {
 		},
 		SslMode::File => {
 			let mut root_cert_store = rustls::RootCertStore::empty();
-			if let Some(ca) = cfg.get_ca_file() {
+			if let Some(ca) = cfg.2 {
 				match load_certs(ca.clone()) {
 					Err(e) => error!("{}:{} {}", file!(), line!(), e),
 					Ok(certs) => {
@@ -148,7 +148,7 @@ fn build_client_ssl_config(cfg: &Config) -> rustls::ClientConfig {
 		},
 	};
 
-	config.alpn_protocols = match cfg.client_version() {
+	config.alpn_protocols = match cfg.1 {
 		HttpVersionMode::V1 => vec![b"http/1.1".to_vec(), b"http/1.0".to_vec()],
 		HttpVersionMode::V2Direct => vec![b"h2".to_vec()],
 		HttpVersionMode::V2Handshake => vec![b"http/1.1".to_vec(), b"http/1.0".to_vec()],
@@ -156,7 +156,7 @@ fn build_client_ssl_config(cfg: &Config) -> rustls::ClientConfig {
 	config
 }
 
-pub async fn wrap_client(stream: TcpStream, cfg: &Config, remote: &RemoteConfig) -> Result<tokio_rustls::client::TlsStream<TcpStream>,String> {
+pub async fn wrap_client(stream: TcpStream, cfg: SslData, remote: &RemoteConfig) -> Result<tokio_rustls::client::TlsStream<TcpStream>,String> {
 	let config = build_client_ssl_config(cfg);
 	let connector = TlsConnector::from(Arc::new(config));
 

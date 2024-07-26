@@ -109,6 +109,8 @@ struct ConfigFilter {
 	rewrite_host: Option<bool>,
 	log_headers: Option<bool>,
 	log_request_body: Option<bool>,
+	ssl_mode: Option<SslMode>,
+	cafile: Option<PathBuf>,
 }
 
 impl ConfigFilter {
@@ -153,6 +155,8 @@ impl ConfigFilter {
 				rewrite_host: t.get("rewrite_host").and_then(|v| v.as_bool()),
 				log_headers: t.get("log_headers").and_then(|v| v.as_bool()),
 				log_request_body: t.get("log_request_body").and_then(|v| v.as_bool()),
+				cafile: t.get("cafile").and_then(|v| v.as_str()).and_then(|v| Some(Path::new(v).to_path_buf())),
+				ssl_mode: None, // TODO
 			}),
 			_ => None,
 		}
@@ -297,6 +301,8 @@ impl std::fmt::Display for HttpVersionMode {
     }
 }
 
+pub type SslData = (SslMode, HttpVersionMode, Option<PathBuf>);
+
 #[derive(Clone)]
 pub struct Config {
 	remote: RemoteConfig,
@@ -354,12 +360,15 @@ impl Config {
 		rv
 	}
 
-	pub fn get_ssl_mode(&self) -> SslMode {
+	pub fn get_ssl_mode(&self, method: &Method, path: &Uri, headers: &HeaderMap) -> SslMode {
 		self.ssl_mode
 	}
 
-	pub fn get_ca_file(&self) -> Option<PathBuf> {
-		self.cafile.clone()
+	pub fn get_ca_file(&self, method: &Method, path: &Uri, headers: &HeaderMap) -> Option<PathBuf> {
+		self.get_filters(method, path, headers)
+			.iter().find(|v| v.cafile.is_some())
+			.and_then(|f| f.cafile.clone())
+			.or(self.cafile.clone())
 	}
 
 	pub fn get_rewrite_host(&self, method: &Method, path: &Uri, headers: &HeaderMap) -> Option<String> {
@@ -468,10 +477,10 @@ impl Config {
 	}
 
 	pub fn server_version(&self) -> HttpVersionMode {
-		HttpVersionMode::V1
+		HttpVersionMode::V1 // TODO
 	}
-	pub fn client_version(&self) -> HttpVersionMode {
-		HttpVersionMode::V1
+	pub fn client_version(&self, method: &Method, path: &Uri, headers: &HeaderMap) -> HttpVersionMode {
+		HttpVersionMode::V1 // TODO
 	}
 
 	pub fn server_ssl(&self) -> bool {

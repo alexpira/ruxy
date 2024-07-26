@@ -8,11 +8,12 @@ use std::pin::Pin;
 use std::future::Future;
 use hyper_util::rt::tokio::{TokioIo, TokioTimer};
 use tokio::signal::unix::{signal, SignalKind};
-use log::{info,warn,error};
+use log::{debug,info,warn,error};
 use std::time::Duration;
 
 use pool::{remote_pool_key,remote_pool_get,remote_pool_release};
 use net::{Stream,Sender,GatewayBody};
+use config::SslData;
 
 mod pool;
 mod config;
@@ -52,11 +53,11 @@ impl Svc {
 		Self { cfg }
 	}
 
-	async fn connect(address: (String,u16), cfg: &config::Config, remote: &config::RemoteConfig) -> Result<Box<dyn Stream>,String> {
+	async fn connect(address: (String,u16), ssldata: SslData, remote: &config::RemoteConfig) -> Result<Box<dyn Stream>,String> {
 		if remote.ssl() {
 			let stream = errmg!(TcpStream::connect(address).await)?;
 			config_socket!(stream);
-			let stream = ssl::wrap_client( stream, cfg, remote ).await?;
+			let stream = ssl::wrap_client( stream, ssldata, remote ).await?;
 			Ok(Box::new(stream))
 		} else {
 			let stream = errmg!(TcpStream::connect(address).await)?;
@@ -65,8 +66,8 @@ impl Svc {
 		}
 	}
 
-	async fn handshake(io: TokioIo<Box<dyn Stream>>, cfg: config::Config) -> Result<Box<dyn Sender>, String> {
-		match cfg.client_version() {
+	async fn handshake(io: TokioIo<Box<dyn Stream>>, httpver: config::HttpVersionMode) -> Result<Box<dyn Sender>, String> {
+		match httpver {
 			config::HttpVersionMode::V1 => {
 				let (sender, conn) = errmg!(hyper::client::conn::http1::handshake(io).await)?;
 				keepalive!(conn);
@@ -120,6 +121,12 @@ impl Svc {
 		let remote = cfg.get_remote(req.method(), req.uri(), req.headers());
 		let address = remote.address();
 		let conn_pool_key = remote_pool_key!(address);
+		let httpver = cfg.client_version(req.method(), req.uri(), req.headers());
+		let ssldata: SslData = (
+			cfg.get_ssl_mode(req.method(), req.uri(), req.headers()),
+			httpver,
+			cfg.get_ca_file(req.method(), req.uri(), req.headers())
+		);
 
 		let remote_request = errmg!(remote_request.body(req.into_body()))?;
 
@@ -136,9 +143,9 @@ impl Svc {
 		let mut sender = if let Some(v) = sender {
 			v
 		} else {
-			let stream = errmg!(Self::connect(address, &cfg, &remote).await)?;
+			let stream = errmg!(Self::connect(address, ssldata, &remote).await)?;
 			let io = TokioIo::new( stream );
-			errmg!(Self::handshake(io, cfg.clone()).await)?
+			errmg!(Self::handshake(io, httpver).await)?
 		};
 
 		let rv = errmg!(sender.send(remote_request).await);
@@ -187,9 +194,16 @@ impl Service<Request<Incoming>> for Svc {
 	}
 }
 
-async fn shutdown_signal() {
+async fn shutdown_signal_int() {
 	signal(SignalKind::interrupt())
 		.expect("failed to install SIGINT signal handler")
+		.recv()
+		.await;
+}
+
+async fn shutdown_signal_term() {
+	signal(SignalKind::terminate())
+		.expect("failed to install SIGTERM signal handler")
 		.recv()
 		.await;
 }
@@ -217,7 +231,9 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 	let svc = Svc::new(cfg.clone());
 
 	let graceful = hyper_util::server::graceful::GracefulShutdown::new();
-	let mut signal = std::pin::pin!(shutdown_signal());
+	let mut signal_int = std::pin::pin!(shutdown_signal_int());
+	let mut signal_term = std::pin::pin!(shutdown_signal_term());
+
 	let ssl = cfg.server_ssl();
 	let acceptor = if ssl {
 		match ssl::get_ssl_acceptor(cfg.clone()) {
@@ -255,13 +271,17 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 					let fut = graceful.watch(conn);
 					tokio::task::spawn(async move {
 						if let Err(err) = fut.await {
-							error!("Error serving connection: {:?}", err);
+							debug!("Client connection terminated {:?}", err);
 						}
 					});
 				}
 			},
-			_ = &mut signal => {
-				info!("graceful shutdown signal received");
+			_ = &mut signal_int => {
+				info!("shutdown signal SIGINT received");
+				break;
+			},
+			_ = &mut signal_term => {
+				info!("shutdown signal SIGTERM received");
 				break;
 			},
 		}
