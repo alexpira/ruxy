@@ -155,8 +155,8 @@ impl ConfigFilter {
 				rewrite_host: t.get("rewrite_host").and_then(|v| v.as_bool()),
 				log_headers: t.get("log_headers").and_then(|v| v.as_bool()),
 				log_request_body: t.get("log_request_body").and_then(|v| v.as_bool()),
-				cafile: t.get("cafile").and_then(|v| v.as_str()).and_then(|v| Some(Path::new(v).to_path_buf())),
-				ssl_mode: None, // TODO
+				cafile: t.get("cafile").and_then(|v| v.as_str()).map(|v| Path::new(v).to_path_buf()),
+				ssl_mode: t.get("ssl_mode").and_then(|v| v.as_str()).map(|v| v.to_string().into())
 			}),
 			_ => None,
 		}
@@ -277,6 +277,26 @@ impl RawConfig {
 #[derive(Clone,Copy)]
 pub enum SslMode { Builtin, File, OS, Dangerous }
 
+impl<T> From<T> for SslMode where T: Into<String> {
+	fn from(value: T) -> SslMode {
+		let value = value.into().trim().to_lowercase();
+
+		match value.as_str() {
+			"unverified" => SslMode::Dangerous,
+			"dangerous" => SslMode::Dangerous,
+			"ca" => SslMode::File,
+			"cafile" => SslMode::File,
+			"file" => SslMode::File,
+			"os" => SslMode::OS,
+			"builtin" => SslMode::Builtin,
+			_ => {
+				warn!("Invalid ssl_mode in config file, falling back to builtin");
+				SslMode::Builtin
+			},
+		}
+	}
+}
+
 impl std::fmt::Display for SslMode {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
@@ -289,6 +309,7 @@ impl std::fmt::Display for SslMode {
 }
 
 #[derive(Clone,Copy)]
+#[allow(dead_code)] // TODO: http2 support is still work-in-progress
 pub enum HttpVersionMode { V1, V2Direct, V2Handshake }
 
 impl std::fmt::Display for HttpVersionMode {
@@ -361,7 +382,10 @@ impl Config {
 	}
 
 	pub fn get_ssl_mode(&self, method: &Method, path: &Uri, headers: &HeaderMap) -> SslMode {
-		self.ssl_mode
+		self.get_filters(method, path, headers)
+			.iter().find(|v| v.ssl_mode.is_some())
+			.and_then(|f| f.ssl_mode)
+			.unwrap_or(self.ssl_mode)
 	}
 
 	pub fn get_ca_file(&self, method: &Method, path: &Uri, headers: &HeaderMap) -> Option<PathBuf> {
@@ -455,31 +479,16 @@ impl Config {
 	}
 
 	fn parse_ssl_mode(rc: &RawConfig) -> SslMode {
-		let value = rc.ssl_mode
-			.clone()
-			.unwrap_or("builtin".to_string())
-			.trim()
-			.to_lowercase();
-
-		match value.as_str() {
-			"unverified" => SslMode::Dangerous,
-			"dangerous" => SslMode::Dangerous,
-			"ca" => SslMode::File,
-			"cafile" => SslMode::File,
-			"file" => SslMode::File,
-			"os" => SslMode::OS,
-			"builtin" => SslMode::Builtin,
-			_ => {
-				warn!("Invalid ssl_mode in config file, falling back to builtin");
-				SslMode::Builtin
-			},
-		}
+		rc.ssl_mode
+			.as_ref()
+			.unwrap_or(&"builtin".to_string())
+			.into()
 	}
 
 	pub fn server_version(&self) -> HttpVersionMode {
 		HttpVersionMode::V1 // TODO
 	}
-	pub fn client_version(&self, method: &Method, path: &Uri, headers: &HeaderMap) -> HttpVersionMode {
+	pub fn client_version(&self, _method: &Method, _path: &Uri, _headers: &HeaderMap) -> HttpVersionMode {
 		HttpVersionMode::V1 // TODO
 	}
 
