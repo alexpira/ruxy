@@ -3,7 +3,7 @@
 
 ## A reverse proxy written in rust
 
-Ruxy is an HTTP transparent reverse proxy that can be useful, mainly in microservice environments, for inspecting or checking application behavior.
+Ruxy is an HTTP transparent reverse proxy that can be useful for inspecting or checking application behavior. Ruxy is developed mainly for microservice environments but its use is not strictly limited to those.
 
 Features include (or will include):
 
@@ -34,7 +34,7 @@ Ruxy can also be built as a docker image:
 
 ### Configuration
 
-Ruxy configuration file contains a main section where all the default behaviors are defined, and a `[filter]` section where you can define overrides for specific HTTP requests.
+Ruxy configuration file contains a main section where all the default behaviors are defined, and a `[filter]` section where you can define configuration overrides for specific HTTP requests.
 
 Main section values can be also specified as environment variables.
 
@@ -72,15 +72,5 @@ Redirect traffic having a specific header to a different endpoint:
 
 	[filters]
 	f1 = { headers = { X-Api-Key = "^SOME-SECRET$" }, remote = "http://private-server/" }
-
-
-
-
-
-
-
-
-
-
 
 
