@@ -176,7 +176,7 @@ impl Service<Request<Incoming>> for Svc {
 			};
 
 			if simple_log {
-				info!("{}REQUEST {} {} {}", corr_id, method, uri.path(), uri.query().unwrap_or("-"));
+				info!("{}REQUEST {:?} {} {} {}", corr_id, req.version(), method, uri.path(), uri.query().unwrap_or("-"));
 			}
 
 			let req = req.map(|v| {
