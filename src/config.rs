@@ -92,6 +92,7 @@ struct RawConfig {
 	graceful_shutdown_timeout: Option<String>,
 	ssl_mode: Option<String>,
 	cafile: Option<String>,
+	log: Option<bool>,
 	log_headers: Option<bool>,
 	log_request_body: Option<bool>,
 	server_ssl_trust: Option<String>,
@@ -107,6 +108,7 @@ struct ConfigFilter {
 
 	remote: Option<RemoteConfig>,
 	rewrite_host: Option<bool>,
+	log: Option<bool>,
 	log_headers: Option<bool>,
 	log_request_body: Option<bool>,
 	ssl_mode: Option<SslMode>,
@@ -153,6 +155,7 @@ impl ConfigFilter {
 
 				remote: t.get("remote").and_then(|v| v.as_str()).and_then(|v| Some(RemoteConfig::build(v))),
 				rewrite_host: t.get("rewrite_host").and_then(|v| v.as_bool()),
+				log: t.get("log").and_then(|v| v.as_bool()),
 				log_headers: t.get("log_headers").and_then(|v| v.as_bool()),
 				log_request_body: t.get("log_request_body").and_then(|v| v.as_bool()),
 				cafile: t.get("cafile").and_then(|v| v.as_str()).map(|v| Path::new(v).to_path_buf()),
@@ -216,6 +219,7 @@ impl RawConfig {
 			graceful_shutdown_timeout: Self::env_str("GRACEFUL_SHUTDOWN_TIMEOUT"),
 			ssl_mode: Self::env_str("SSL_MODE"),
 			cafile: Self::env_str("CAFILE"),
+			log: Self::env_bool("LOG"),
 			log_headers: Self::env_bool("LOG_HEADERS"),
 			log_request_body: Self::env_bool("LOG_REQUEST_BODY"),
 			server_ssl_trust: Self::env_str("SERVER_SSL_TRUST"),
@@ -252,6 +256,7 @@ impl RawConfig {
 		self.graceful_shutdown_timeout = self.graceful_shutdown_timeout.take().or(other.graceful_shutdown_timeout);
 		self.ssl_mode = self.ssl_mode.take().or(other.ssl_mode);
 		self.cafile = self.cafile.take().or(other.cafile);
+		self.log = self.log.take().or(other.log);
 		self.log_headers = self.log_headers.take().or(other.log_headers);
 		self.log_request_body = self.log_request_body.take().or(other.log_request_body);
 		self.server_ssl_trust = self.server_ssl_trust.take().or(other.server_ssl_trust);
@@ -329,6 +334,7 @@ pub struct Config {
 	remote: RemoteConfig,
 	rewrite_host: bool,
 	ssl_mode: SslMode,
+	log: bool,
 	log_headers: bool,
 	log_request_body: bool,
 	cafile: Option<PathBuf>,
@@ -363,6 +369,7 @@ impl Config {
 			graceful_shutdown_timeout: Self::parse_graceful_shutdown_timeout(&raw_cfg),
 			ssl_mode: Self::parse_ssl_mode(&raw_cfg),
 			cafile: Self::parse_file(&raw_cfg.cafile),
+			log: raw_cfg.log.unwrap_or(true),
 			log_headers: raw_cfg.log_headers.unwrap_or(false),
 			log_request_body: raw_cfg.log_request_body.unwrap_or(false),
 			server_ssl_trust: Self::parse_file(&raw_cfg.server_ssl_trust),
@@ -421,6 +428,13 @@ impl Config {
 
 	pub fn get_bind(&self) -> SocketAddr {
 		self.bind
+	}
+
+	pub fn log(&self, method: &Method, path: &Uri, headers: &HeaderMap) -> bool {
+		self.get_filters(method, path, headers)
+			.iter().find(|v| v.log.is_some())
+			.and_then(|f| f.log)
+			.unwrap_or(self.log)
 	}
 
 	pub fn log_headers(&self, method: &Method, path: &Uri, headers: &HeaderMap) -> bool {

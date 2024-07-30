@@ -16,7 +16,7 @@ graceful_shutdown_timeout = "2sec"
 # server_ssl_key = "./test-server/key.pem"
 
 [filters]
-f1 = { path = "^/test$", method = "GET", log_headers = true }
+f1 = { path = "^/test$", method = "GET", log = false }
 f2 = { path = "^/test2/.*", log_headers = true }
 f3 = { method = "POST", log_request_body = true }
 f4 = { headers = { X-Test = "^hello$" }, remote = "http://localhost:3000/" }

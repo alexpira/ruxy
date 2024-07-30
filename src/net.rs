@@ -41,8 +41,9 @@ impl Sender for hyper::client::conn::http2::SendRequest<GatewayBody> {
 
 pub struct GatewayBody {
 	incoming: Option<Incoming>,
-	save_payload: bool,
 	frames: Vec<hyper::body::Bytes>,
+	save_payload: bool,
+	corr_id: String,
 }
 impl GatewayBody {
 	pub fn empty() -> GatewayBody {
@@ -50,6 +51,7 @@ impl GatewayBody {
 			incoming: None,
 			frames: Vec::new(),
 			save_payload: false,
+			corr_id: "".to_string(),
 		}
 	}
 	pub fn wrap(inner: Incoming) -> GatewayBody {
@@ -57,11 +59,13 @@ impl GatewayBody {
 			incoming: Some(inner),
 			frames: Vec::new(),
 			save_payload: false,
+			corr_id: "".to_string(),
 		}
 	}
 
-	pub fn log_payload(&mut self, value: bool) {
+	pub fn log_payload(&mut self, value: bool, corr_id: String) {
 		self.save_payload = value;
+		self.corr_id = corr_id;
 	}
 
 	fn add_frame(&mut self, frame: &hyper::body::Bytes) {
@@ -73,7 +77,11 @@ impl GatewayBody {
 	fn end(&self) {
 		if self.save_payload {
 			let log = String::from_utf8(self.frames.clone().concat()).unwrap_or("DECODE-ERROR".to_string());
-			info!("BODY: {}", log);
+			if log.is_empty() {
+				info!("{}EMPTY BODY", self.corr_id);
+			} else {
+				info!("{}BODY: {}", self.corr_id, log);
+			}
 		}
 	}
 }

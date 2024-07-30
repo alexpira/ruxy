@@ -166,17 +166,30 @@ impl Service<Request<Incoming>> for Svc {
 			let method = req.method().clone();
 			let headers = req.headers().clone();
 
-			info!("REQUEST {} {} {}", method, uri.path(), uri.query().unwrap_or("-"));
+			let simple_log = cfg.log(&method, &uri, &headers);
+			let log_headers = cfg.log_headers(&method, &uri, &headers);
+
+			let corr_id = if simple_log {
+				format!("{:?} ", uuid::Uuid::new_v4())
+			} else {
+				"".to_string()
+			};
+
+			if simple_log {
+				info!("{}REQUEST {} {} {}", corr_id, method, uri.path(), uri.query().unwrap_or("-"));
+			}
 
 			let req = req.map(|v| {
 				let mut body = GatewayBody::wrap(v);
-				body.log_payload(cfg.log_request_body(&method, &uri, &headers));
+				body.log_payload(cfg.log_request_body(&method, &uri, &headers), corr_id.clone());
 				body
 			});
 
-			let log_headers = cfg.log_headers(&method, &uri, &headers);
 			match Self::forward(cfg, req).await {
 				Ok(remote_resp) => {
+					if simple_log {
+						info!("{}REPLY {:?} {:?}", corr_id, remote_resp.version(), remote_resp.status());
+					}
 					if log_headers {
 						remote_resp.headers().iter().for_each(|(k,v)| info!(" <- {:?}: {:?}", k, v));
 					}
