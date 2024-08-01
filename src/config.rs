@@ -261,6 +261,7 @@ struct ConfigRule {
 	actions: Vec<String>,
 	enabled: bool,
 	disable_on: Option<Regex>,
+	keep_while: Option<Regex>,
 	probability: Option<f64>,
 	max_life: Option<u64>,
 	consumed: u64,
@@ -299,6 +300,15 @@ impl ConfigRule {
 							None
 						},
 					}),
+				keep_while: t.get("keep_while")
+					.and_then(|v| v.as_str())
+					.and_then(|v| match Regex::new(v) {
+						Ok(r) => Some(r),
+						Err(e) => {
+							warn!("Invalid keep_while regex in configuration \"{}\": {:?}", v, e);
+							None
+						},
+					}),
 				max_life: t.get("max_life").and_then(|v| v.as_integer()).and_then(|v| Some(v as u64)),
 				consumed: 0u64,
 			}),
@@ -310,16 +320,18 @@ impl ConfigRule {
 		if !self.enabled {
 			return false;
 		}
-		if self.filters.is_empty() || self.actions.is_empty() {
+		if self.actions.is_empty() {
 			return false;
 		}
 
-		let mut rv = false;
-		for f in &self.filters {
-			if let Some(cfilter) = filters.get(f) {
-				if cfilter.matches(method, path, headers) {
-					rv = true;
-					break;
+		let mut rv = self.filters.is_empty();
+		if ! rv {
+			for f in &self.filters {
+				if let Some(cfilter) = filters.get(f) {
+					if cfilter.matches(method, path, headers) {
+						rv = true;
+						break;
+					}
 				}
 			}
 		}
@@ -352,11 +364,19 @@ impl ConfigRule {
 		if !self.enabled {
 			return;
 		}
+		let status_str = format!("{:?}", status);
 		if let Some(check) = &self.disable_on {
-			let status_str = format!("{:?}", status);
 			if check.is_match(&status_str) {
-				info!("Disabling rule {} due to reply status {}", &self.name, status_str);
+				info!("Disabling rule {} due to reply status {} matching disable_on rule", &self.name, &status_str);
 				self.enabled = false;
+				return;
+			}
+		}
+		if let Some(check) = &self.keep_while {
+			if ! check.is_match(&status_str) {
+				info!("Disabling rule {} due to reply status {} not matching keep_while rule", &self.name, &status_str);
+				self.enabled = false;
+				return;
 			}
 		}
 	}

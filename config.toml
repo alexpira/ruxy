@@ -31,6 +31,7 @@ to_google = { remote = "https://www.google.it", rewrite_host = true }
 
 [rules]
 r1 = { filter = "test", action = "to_google", disable_on = "(404)|(5..)", probability = 0.1, max_life = 10 }
-r2 = { filters = ["test2_and_below","post"], actions = ["log_hdr","log_body"] }
+r2 = { action = "no_log", keep_while = "200" }
+r3 = { filters = ["test2_and_below","post"], actions = ["log_hdr","log_body"] }
 
 
