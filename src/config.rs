@@ -171,8 +171,8 @@ impl ConfigFilter {
 	}
 }
 
-#[derive(Clone)]
-struct ConfigAction {
+#[derive(Clone,Default)]
+pub struct ConfigAction {
 	remote: Option<RemoteConfig>,
 	rewrite_host: Option<bool>,
 	log: Option<bool>,
@@ -198,12 +198,52 @@ impl ConfigAction {
 		}
 	}
 
-	fn has_remote(&self) -> bool {
-		self.remote.is_some()
+	fn merge(&mut self, other: &ConfigAction) {
+		self.remote = self.remote.take().or(other.remote.clone());
+		self.rewrite_host = self.rewrite_host.take().or(other.rewrite_host);
+		self.log = self.log.take().or(other.log);
+		self.log_headers = self.log_headers.take().or(other.log_headers);
+		self.log_request_body = self.log_request_body.take().or(other.log_request_body);
+		self.cafile = self.cafile.take().or(other.cafile.clone());
+		self.ssl_mode = self.ssl_mode.take().or(other.ssl_mode);
 	}
 
-	fn get_remote(&self) -> Option<RemoteConfig> {
-		self.remote.clone()
+	pub fn get_ssl_mode(&self) -> SslMode {
+		self.ssl_mode.unwrap_or(SslMode::Builtin)
+	}
+
+	pub fn get_ca_file(&self) -> Option<PathBuf> {
+		self.cafile.clone()
+	}
+
+	pub fn get_rewrite_host(&self) -> Option<String> {
+		let rewrite = self.rewrite_host.unwrap_or(false);
+
+		if !rewrite {
+			return None;
+		}
+
+		Some( self.remote.as_ref().unwrap().raw() )
+	}
+
+	pub fn get_remote(&self) -> RemoteConfig {
+		self.remote.clone().unwrap()
+	}
+
+	pub fn log(&self) -> bool {
+		self.log.unwrap_or(true)
+	}
+
+	pub fn log_headers(&self) -> bool {
+		self.log_headers.unwrap_or(false)
+	}
+
+	pub fn log_request_body(&self) -> bool {
+		self.log_request_body.unwrap_or(false)
+	}
+
+	pub fn client_version(&self) -> HttpVersionMode {
+		HttpVersionMode::V1 // TODO
 	}
 }
 
@@ -432,19 +472,12 @@ pub type SslData = (SslMode, HttpVersionMode, Option<PathBuf>);
 
 #[derive(Clone)]
 pub struct Config {
-	remote: RemoteConfig,
-	rewrite_host: bool,
-	ssl_mode: SslMode,
-	log: bool,
-	log_headers: bool,
-	log_request_body: bool,
-	cafile: Option<PathBuf>,
-
 	bind: SocketAddr,
 	graceful_shutdown_timeout: Duration,
 	server_ssl_trust: Option<PathBuf>,
 	server_ssl_key: Option<PathBuf>,
 
+	default_action: ConfigAction,
 	filters: HashMap<String,ConfigFilter>,
 	actions: HashMap<String,ConfigAction>,
 	rules: Vec<ConfigRule>,
@@ -462,15 +495,17 @@ impl Config {
 		let remote = raw_cfg.remote.as_ref().expect("Missing main remote host in configuration");
 
 		Ok(Config {
-			remote: RemoteConfig::build(remote),
-			rewrite_host: raw_cfg.rewrite_host.unwrap_or(false),
+			default_action: ConfigAction {
+				remote: Some(RemoteConfig::build(remote)),
+				rewrite_host: raw_cfg.rewrite_host,
+				ssl_mode: Some(Self::parse_ssl_mode(&raw_cfg)),
+				cafile: Self::parse_file(&raw_cfg.cafile),
+				log: raw_cfg.log,
+				log_headers: raw_cfg.log_headers,
+				log_request_body: raw_cfg.log_request_body,
+			},
 			bind: Self::parse_bind(&raw_cfg),
 			graceful_shutdown_timeout: Self::parse_graceful_shutdown_timeout(&raw_cfg),
-			ssl_mode: Self::parse_ssl_mode(&raw_cfg),
-			cafile: Self::parse_file(&raw_cfg.cafile),
-			log: raw_cfg.log.unwrap_or(true),
-			log_headers: raw_cfg.log_headers.unwrap_or(false),
-			log_request_body: raw_cfg.log_request_body.unwrap_or(false),
 			server_ssl_trust: Self::parse_file(&raw_cfg.server_ssl_trust),
 			server_ssl_key: Self::parse_file(&raw_cfg.server_ssl_key),
 			filters: raw_cfg.get_filters(),
@@ -490,70 +525,40 @@ impl Config {
 				}
 			}
 		}
+		rv.push(&self.default_action);
 		rv
 	}
 
-	pub fn get_ssl_mode(&self, method: &Method, path: &Uri, headers: &HeaderMap) -> SslMode {
-		self.get_actions(method, path, headers)
-			.iter().find(|v| v.ssl_mode.is_some())
-			.and_then(|f| f.ssl_mode)
-			.unwrap_or(self.ssl_mode)
-	}
-
-	pub fn get_ca_file(&self, method: &Method, path: &Uri, headers: &HeaderMap) -> Option<PathBuf> {
-		self.get_actions(method, path, headers)
-			.iter().find(|v| v.cafile.is_some())
-			.and_then(|f| f.cafile.clone())
-			.or(self.cafile.clone())
-	}
-
-	pub fn get_rewrite_host(&self, method: &Method, path: &Uri, headers: &HeaderMap) -> Option<String> {
-		let rewrite = self.get_actions(method, path, headers)
-			.iter().find(|v| v.rewrite_host.is_some())
-			.and_then(|f| f.rewrite_host)
-			.unwrap_or(self.rewrite_host);
-
-		if !rewrite {
-			return None;
+	pub fn get_action_for_request(&self, method: &Method, path: &Uri, headers: &HeaderMap) -> ConfigAction {
+		let mut rv = ConfigAction::default();
+		for act in self.get_actions(method, path, headers) {
+			rv.merge(act);
 		}
-
-		Some( self.get_remote(method, path, headers).raw() )
+		rv
 	}
 
 	pub fn get_graceful_shutdown_timeout(&self) -> Duration {
 		self.graceful_shutdown_timeout
 	}
 
-	pub fn get_remote(&self, method: &Method, path: &Uri, headers: &HeaderMap) -> RemoteConfig {
-		self.get_actions(method, path, headers)
-			.iter().find(|v| v.has_remote())
-			.and_then(|f| f.get_remote())
-			.unwrap_or(self.remote.clone())
-	}
-
 	pub fn get_bind(&self) -> SocketAddr {
 		self.bind
 	}
 
-	pub fn log(&self, method: &Method, path: &Uri, headers: &HeaderMap) -> bool {
-		self.get_actions(method, path, headers)
-			.iter().find(|v| v.log.is_some())
-			.and_then(|f| f.log)
-			.unwrap_or(self.log)
+	pub fn server_version(&self) -> HttpVersionMode {
+		HttpVersionMode::V1 // TODO
 	}
 
-	pub fn log_headers(&self, method: &Method, path: &Uri, headers: &HeaderMap) -> bool {
-		self.get_actions(method, path, headers)
-			.iter().find(|v| v.log_headers.is_some())
-			.and_then(|f| f.log_headers)
-			.unwrap_or(self.log_headers)
+	pub fn server_ssl(&self) -> bool {
+		self.server_ssl_trust.is_some() && self.server_ssl_key.is_some()
 	}
 
-	pub fn log_request_body(&self, method: &Method, path: &Uri, headers: &HeaderMap) -> bool {
-		self.get_actions(method, path, headers)
-			.iter().find(|v| v.log_request_body.is_some())
-			.and_then(|f| f.log_request_body)
-			.unwrap_or(self.log_request_body)
+	pub fn get_server_ssl_cafile(&self) -> Option<PathBuf> {
+		self.server_ssl_trust.clone()
+	}
+
+	pub fn get_server_ssl_keyfile(&self) -> Option<PathBuf> {
+		self.server_ssl_key.clone()
 	}
 
 	fn parse_bind(rc: &RawConfig) -> SocketAddr {
@@ -602,25 +607,6 @@ impl Config {
 			.as_ref()
 			.unwrap_or(&"builtin".to_string())
 			.into()
-	}
-
-	pub fn server_version(&self) -> HttpVersionMode {
-		HttpVersionMode::V1 // TODO
-	}
-	pub fn client_version(&self, _method: &Method, _path: &Uri, _headers: &HeaderMap) -> HttpVersionMode {
-		HttpVersionMode::V1 // TODO
-	}
-
-	pub fn server_ssl(&self) -> bool {
-		self.server_ssl_trust.is_some() && self.server_ssl_key.is_some()
-	}
-
-	pub fn get_server_ssl_cafile(&self) -> Option<PathBuf> {
-		self.server_ssl_trust.clone()
-	}
-
-	pub fn get_server_ssl_keyfile(&self) -> Option<PathBuf> {
-		self.server_ssl_key.clone()
 	}
 }
 

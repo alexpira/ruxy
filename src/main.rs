@@ -91,7 +91,7 @@ impl Svc {
 	}
 
 
-	async fn forward(cfg: config::Config, req: Request<GatewayBody>, corr_id: &str) -> Result<Response<Incoming>,String> {
+	async fn forward(cfg: config::ConfigAction, req: Request<GatewayBody>, corr_id: &str) -> Result<Response<Incoming>,String> {
 		let hdrs = req.headers();
 
 		let mut remote_request = Request::builder()
@@ -100,11 +100,11 @@ impl Svc {
 
 		let mut host_done = false;
 		for (key, value) in hdrs.iter() {
-			if cfg.log_headers(req.method(), req.uri(), req.headers()) {
+			if cfg.log_headers() {
 				info!("{} -> {:?}: {:?}", corr_id, key, value);
 			}
 			if key == "host" {
-				if let Some(repl) = cfg.get_rewrite_host(req.method(), req.uri(), req.headers()) {
+				if let Some(repl) = cfg.get_rewrite_host() {
 					remote_request = remote_request.header(key, repl);
 					host_done = true;
 					continue;
@@ -113,20 +113,16 @@ impl Svc {
 			remote_request = remote_request.header(key, value);
 		}
 		if !host_done {
-			if let Some(repl) = cfg.get_rewrite_host(req.method(), req.uri(), req.headers()) {
+			if let Some(repl) = cfg.get_rewrite_host() {
 				remote_request = remote_request.header("host", repl);
 			}
 		}
 
-		let remote = cfg.get_remote(req.method(), req.uri(), req.headers());
+		let remote = cfg.get_remote();
 		let address = remote.address();
 		let conn_pool_key = remote_pool_key!(address);
-		let httpver = cfg.client_version(req.method(), req.uri(), req.headers());
-		let ssldata: SslData = (
-			cfg.get_ssl_mode(req.method(), req.uri(), req.headers()),
-			httpver,
-			cfg.get_ca_file(req.method(), req.uri(), req.headers())
-		);
+		let httpver = cfg.client_version();
+		let ssldata: SslData = (cfg.get_ssl_mode(), httpver, cfg.get_ca_file());
 
 		let remote_request = errmg!(remote_request.body(req.into_body()))?;
 
@@ -160,14 +156,14 @@ impl Service<Request<Incoming>> for Svc {
 	type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
 	fn call(&self, req: Request<Incoming>) -> Self::Future {
-		let cfg = self.cfg.clone();
-		Box::pin(async move {
-			let uri = req.uri().clone();
-			let method = req.method().clone();
-			let headers = req.headers().clone();
+		let uri = req.uri().clone();
+		let method = req.method().clone();
+		let headers = req.headers().clone();
+		let cfg = self.cfg.get_action_for_request(&method, &uri, &headers);
 
-			let simple_log = cfg.log(&method, &uri, &headers);
-			let log_headers = cfg.log_headers(&method, &uri, &headers);
+		Box::pin(async move {
+			let simple_log = cfg.log();
+			let log_headers = cfg.log_headers();
 
 			let corr_id = if simple_log {
 				format!("{:?} ", uuid::Uuid::new_v4())
@@ -181,7 +177,7 @@ impl Service<Request<Incoming>> for Svc {
 
 			let req = req.map(|v| {
 				let mut body = GatewayBody::wrap(v);
-				body.log_payload(cfg.log_request_body(&method, &uri, &headers), corr_id.clone());
+				body.log_payload(cfg.log_request_body(), corr_id.clone());
 				body
 			});
 
