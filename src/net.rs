@@ -4,9 +4,10 @@ use async_trait::async_trait;
 use hyper::body::Frame;
 use std::pin::Pin;
 
+use base64::prelude::*;
 use hyper::body::Incoming;
 use hyper::{Request, Response};
-use log::{info};
+use log::{info,warn};
 use tokio::io::{AsyncRead,AsyncWrite};
 use core::marker::Unpin;
 
@@ -44,6 +45,9 @@ pub struct GatewayBody {
 	frames: Vec<hyper::body::Bytes>,
 	save_payload: bool,
 	log_prefix: String,
+	max_payload_size: i64,
+	current_payload_size: i64,
+	transfer_started: bool,
 }
 impl GatewayBody {
 	pub fn empty() -> GatewayBody {
@@ -52,6 +56,9 @@ impl GatewayBody {
 			frames: Vec::new(),
 			save_payload: false,
 			log_prefix: "".to_string(),
+			max_payload_size: 0,
+			current_payload_size: 0,
+			transfer_started: false,
 		}
 	}
 	pub fn wrap(inner: Incoming) -> GatewayBody {
@@ -60,23 +67,42 @@ impl GatewayBody {
 			frames: Vec::new(),
 			save_payload: false,
 			log_prefix: "".to_string(),
+			max_payload_size: 0,
+			current_payload_size: 0,
+			transfer_started: false,
 		}
 	}
 
-	pub fn log_payload(&mut self, value: bool, log_prefix: String) {
-		self.save_payload = value;
-		self.log_prefix = log_prefix;
+	pub fn log_payload(&mut self, value: bool, max_size: i64, log_prefix: String) {
+		if self.transfer_started {
+			warn!("{}:{} Cannot change parameters as transfer has already started", file!(), line!());
+		} else {
+			self.save_payload = value;
+			self.log_prefix = log_prefix;
+			self.max_payload_size = max_size;
+		}
 	}
 
 	fn add_frame(&mut self, frame: &hyper::body::Bytes) {
+		self.transfer_started = true;
 		if self.save_payload {
-			self.frames.push(frame.clone());
+			let newsz = self.current_payload_size + (frame.len() as i64);
+			if newsz > self.max_payload_size {
+				self.save_payload = false;
+				warn!("{}{}:{} Hit max payload size", self.log_prefix, file!(), line!());
+			} else {
+				self.current_payload_size = newsz;
+				self.frames.push(frame.clone());
+			}
 		}
 	}
 
 	fn end(&self) {
 		if self.save_payload {
-			let log = String::from_utf8(self.frames.clone().concat()).unwrap_or("DECODE-ERROR".to_string());
+			let bdata = self.frames.clone().concat();
+			let log = String::from_utf8(bdata).unwrap_or_else(|v| {
+				format!("DECODE-ERROR at {}, B64={}", v.utf8_error().valid_up_to(), BASE64_STANDARD.encode(v.as_bytes()))
+			});
 			if log.is_empty() {
 				info!("{}EMPTY BODY", self.log_prefix);
 			} else {

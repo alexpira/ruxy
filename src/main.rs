@@ -177,6 +177,7 @@ impl Service<Request<Incoming>> for Svc {
 			let simple_log = cfg.log();
 			let log_headers = cfg.log_headers();
 			let log_reply_body = cfg.log_reply_body();
+			let max_reply_log = cfg.max_reply_log_size();
 
 
 			let corr_id = if simple_log {
@@ -197,7 +198,7 @@ impl Service<Request<Incoming>> for Svc {
 			let req = req.map(|v| {
 				let mut body = GatewayBody::wrap(v);
 				if cfg.log_request_body() {
-					body.log_payload(true, format!("{}REQUEST ", corr_id));
+					body.log_payload(true, cfg.max_request_log_size(), format!("{}REQUEST ", corr_id));
 				}
 				body
 			});
@@ -220,7 +221,7 @@ impl Service<Request<Incoming>> for Svc {
 					Ok(remote_resp.map(|v| {
 						let mut body = GatewayBody::wrap(v);
 						if log_reply_body {
-							body.log_payload(true, format!("{}REPLY ", corr_id));
+							body.log_payload(true, max_reply_log, format!("{}REPLY ", corr_id));
 						}
 						body
 					}))

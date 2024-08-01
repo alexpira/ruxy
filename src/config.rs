@@ -178,7 +178,9 @@ pub struct ConfigAction {
 	log: Option<bool>,
 	log_headers: Option<bool>,
 	log_request_body: Option<bool>,
+	max_request_log_size: Option<i64>,
 	log_reply_body: Option<bool>,
+	max_reply_log_size: Option<i64>,
 	ssl_mode: Option<SslMode>,
 	cafile: Option<PathBuf>,
 }
@@ -192,7 +194,9 @@ impl ConfigAction {
 				log: t.get("log").and_then(|v| v.as_bool()),
 				log_headers: t.get("log_headers").and_then(|v| v.as_bool()),
 				log_request_body: t.get("log_request_body").and_then(|v| v.as_bool()),
+				max_request_log_size: t.get("max_request_log_size").and_then(|v| v.as_integer()),
 				log_reply_body: t.get("log_reply_body").and_then(|v| v.as_bool()),
+				max_reply_log_size: t.get("max_reply_log_size").and_then(|v| v.as_integer()),
 				cafile: t.get("cafile").and_then(|v| v.as_str()).map(|v| Path::new(v).to_path_buf()),
 				ssl_mode: t.get("ssl_mode").and_then(|v| v.as_str()).map(|v| v.to_string().into())
 			}),
@@ -245,8 +249,16 @@ impl ConfigAction {
 		self.log_request_body.unwrap_or(false)
 	}
 
+	pub fn max_request_log_size(&self) -> i64 {
+		self.max_request_log_size.unwrap_or(256 * 1024)
+	}
+
 	pub fn log_reply_body(&self) -> bool {
 		self.log_reply_body.unwrap_or(false)
+	}
+
+	pub fn max_reply_log_size(&self) -> i64 {
+		self.max_reply_log_size.unwrap_or(256 * 1024)
 	}
 
 	pub fn client_version(&self) -> HttpVersionMode {
@@ -393,7 +405,9 @@ struct RawConfig {
 	log: Option<bool>,
 	log_headers: Option<bool>,
 	log_request_body: Option<bool>,
+	max_request_log_size: Option<i64>,
 	log_reply_body: Option<bool>,
+	max_reply_log_size: Option<i64>,
 	server_ssl_trust: Option<String>,
 	server_ssl_key: Option<String>,
 	filters: Option<toml::Table>,
@@ -414,6 +428,8 @@ impl RawConfig {
 			log_headers: None,
 			log_request_body: None,
 			log_reply_body: None,
+			max_request_log_size: None,
+			max_reply_log_size: None,
 			server_ssl_trust: Self::env_str("SERVER_SSL_TRUST"),
 			server_ssl_key: Self::env_str("SERVER_SSL_KEY"),
 			filters: None,
@@ -453,7 +469,9 @@ impl RawConfig {
 		self.log = self.log.take().or(other.log);
 		self.log_headers = self.log_headers.take().or(other.log_headers);
 		self.log_request_body = self.log_request_body.take().or(other.log_request_body);
+		self.max_request_log_size = self.max_request_log_size.take().or(other.max_request_log_size);
 		self.log_reply_body = self.log_reply_body.take().or(other.log_reply_body);
+		self.max_reply_log_size = self.max_reply_log_size.take().or(other.max_reply_log_size);
 		self.server_ssl_trust = self.server_ssl_trust.take().or(other.server_ssl_trust);
 		self.server_ssl_key = self.server_ssl_key.take().or(other.server_ssl_key);
 		self.filters = self.filters.take().or(other.filters);
@@ -590,7 +608,9 @@ impl Config {
 				log: raw_cfg.log,
 				log_headers: raw_cfg.log_headers,
 				log_request_body: raw_cfg.log_request_body,
+				max_request_log_size: raw_cfg.max_request_log_size,
 				log_reply_body: raw_cfg.log_reply_body,
+				max_reply_log_size: raw_cfg.max_reply_log_size,
 			},
 			bind: Self::parse_bind(&raw_cfg),
 			graceful_shutdown_timeout: Self::parse_graceful_shutdown_timeout(&raw_cfg),
