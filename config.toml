@@ -1,7 +1,8 @@
 
+
 bind = "localhost:8080"
 remote = "http://localhost:8000/"
-rewrite_host = true
+rewrite_host = false
 
 # ssl_mode = "os"
 
@@ -15,9 +16,19 @@ graceful_shutdown_timeout = "2sec"
 # server_ssl_trust = "./test-server/cert.pem"
 # server_ssl_key = "./test-server/key.pem"
 
+# log_headers=true
+
 [filters]
-f1 = { path = "^/test$", method = "GET", log = false }
-f2 = { path = "^/test2/.*", log_headers = true }
-f3 = { method = "POST", log_request_body = true }
-f4 = { headers = { X-Test = "^hello$" }, remote = "http://localhost:3000/" }
+test = { path = "^/test$", method = "GET" }
+test2_and_below = { path = "^/test2/.*" }
+post = { method = "POST" }
+
+[actions]
+no_log = { log = false, log_headers = false, log_request_body = false }
+log_hdr = { log_headers = true }
+log_body = { log_request_body = true }
+
+[rules]
+r1 = { filter = "test", action = "no_log" }
+r2 = { filters = ["test2_and_below","post"], actions = ["log_hdr","log_body"] }
 

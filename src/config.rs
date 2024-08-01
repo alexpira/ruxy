@@ -1,6 +1,6 @@
 
 use std::path::{Path,PathBuf};
-use std::{fs,env,error::Error,collections::HashMap};
+use std::{env,error::Error,collections::HashMap};
 use serde::Deserialize;
 use std::time::Duration;
 use std::net::{ToSocketAddrs, SocketAddr};
@@ -84,35 +84,11 @@ impl RemoteConfig {
 	}
 }
 
-#[derive(Deserialize)]
-struct RawConfig {
-	remote: Option<String>,
-	bind: Option<String>,
-	rewrite_host: Option<bool>,
-	graceful_shutdown_timeout: Option<String>,
-	ssl_mode: Option<String>,
-	cafile: Option<String>,
-	log: Option<bool>,
-	log_headers: Option<bool>,
-	log_request_body: Option<bool>,
-	server_ssl_trust: Option<String>,
-	server_ssl_key: Option<String>,
-	filters: Option<toml::Table>,
-}
-
 #[derive(Clone)]
 struct ConfigFilter {
 	path: Option<Regex>,
 	method: Option<String>,
 	headers: Option<HashMap<String,Regex>>,
-
-	remote: Option<RemoteConfig>,
-	rewrite_host: Option<bool>,
-	log: Option<bool>,
-	log_headers: Option<bool>,
-	log_request_body: Option<bool>,
-	ssl_mode: Option<SslMode>,
-	cafile: Option<PathBuf>,
 }
 
 impl ConfigFilter {
@@ -153,24 +129,9 @@ impl ConfigFilter {
 				method: t.get("method").and_then(|v| v.as_str()).and_then(|v| Some(v.to_string())),
 				headers: t.get("headers").and_then(|v| Self::parse_headers(v)),
 
-				remote: t.get("remote").and_then(|v| v.as_str()).and_then(|v| Some(RemoteConfig::build(v))),
-				rewrite_host: t.get("rewrite_host").and_then(|v| v.as_bool()),
-				log: t.get("log").and_then(|v| v.as_bool()),
-				log_headers: t.get("log_headers").and_then(|v| v.as_bool()),
-				log_request_body: t.get("log_request_body").and_then(|v| v.as_bool()),
-				cafile: t.get("cafile").and_then(|v| v.as_str()).map(|v| Path::new(v).to_path_buf()),
-				ssl_mode: t.get("ssl_mode").and_then(|v| v.as_str()).map(|v| v.to_string().into())
 			}),
 			_ => None,
 		}
-	}
-
-	fn has_remote(&self) -> bool {
-		self.remote.is_some()
-	}
-
-	fn get_remote(&self) -> Option<RemoteConfig> {
-		self.remote.clone()
 	}
 
 	fn matches(&self, method: &Method, path: &Uri, headers: &HeaderMap) -> bool {
@@ -210,6 +171,108 @@ impl ConfigFilter {
 	}
 }
 
+#[derive(Clone)]
+struct ConfigAction {
+	remote: Option<RemoteConfig>,
+	rewrite_host: Option<bool>,
+	log: Option<bool>,
+	log_headers: Option<bool>,
+	log_request_body: Option<bool>,
+	ssl_mode: Option<SslMode>,
+	cafile: Option<PathBuf>,
+}
+
+impl ConfigAction {
+	fn parse(v: &toml::Value) -> Option<ConfigAction> {
+		match v {
+			toml::Value::Table(t) => Some(ConfigAction {
+				remote: t.get("remote").and_then(|v| v.as_str()).and_then(|v| Some(RemoteConfig::build(v))),
+				rewrite_host: t.get("rewrite_host").and_then(|v| v.as_bool()),
+				log: t.get("log").and_then(|v| v.as_bool()),
+				log_headers: t.get("log_headers").and_then(|v| v.as_bool()),
+				log_request_body: t.get("log_request_body").and_then(|v| v.as_bool()),
+				cafile: t.get("cafile").and_then(|v| v.as_str()).map(|v| Path::new(v).to_path_buf()),
+				ssl_mode: t.get("ssl_mode").and_then(|v| v.as_str()).map(|v| v.to_string().into())
+			}),
+			_ => None,
+		}
+	}
+
+	fn has_remote(&self) -> bool {
+		self.remote.is_some()
+	}
+
+	fn get_remote(&self) -> Option<RemoteConfig> {
+		self.remote.clone()
+	}
+}
+
+#[derive(Clone)]
+struct ConfigRule {
+	filters: Vec<String>,
+	actions: Vec<String>,
+}
+
+impl ConfigRule {
+	fn load_vec(t: &toml::Table, str_key: &str, list_key: &str) -> Vec<String> {
+		let mut data = Vec::new();
+		if let Some(single) = t.get(str_key).and_then(|v| v.as_str()) {
+			data.push(single.to_string());
+		}
+		if let Some(list) = t.get(list_key).and_then(|v| v.as_array()) {
+			for v in list {
+				if let Some(vstr) = v.as_str() {
+					data.push(vstr.to_string());
+				}
+			}
+		}
+		data
+	}
+
+	fn parse(v: &toml::Value) -> Option<ConfigRule> {
+		match v {
+			toml::Value::Table(t) => Some(ConfigRule {
+				filters: Self::load_vec(t, "filter", "filters"),
+				actions: Self::load_vec(t, "action", "actions"),
+			}),
+			_ => None,
+		}
+	}
+
+	fn matches(&self, filters: &HashMap<String,ConfigFilter>, method: &Method, path: &Uri, headers: &HeaderMap) -> bool {
+		if self.filters.is_empty() || self.actions.is_empty() {
+			return false;
+		}
+
+		for f in &self.filters {
+			if let Some(cfilter) = filters.get(f) {
+				if cfilter.matches(method, path, headers) {
+					return true;
+				}
+			}
+		}
+		false
+	}
+}
+
+#[derive(Deserialize)]
+struct RawConfig {
+	remote: Option<String>,
+	bind: Option<String>,
+	rewrite_host: Option<bool>,
+	graceful_shutdown_timeout: Option<String>,
+	ssl_mode: Option<String>,
+	cafile: Option<String>,
+	log: Option<bool>,
+	log_headers: Option<bool>,
+	log_request_body: Option<bool>,
+	server_ssl_trust: Option<String>,
+	server_ssl_key: Option<String>,
+	filters: Option<toml::Table>,
+	actions: Option<toml::Table>,
+	rules: Option<toml::Table>,
+}
+
 impl RawConfig {
 	fn from_env() -> RawConfig {
 		RawConfig {
@@ -225,6 +288,8 @@ impl RawConfig {
 			server_ssl_trust: Self::env_str("SERVER_SSL_TRUST"),
 			server_ssl_key: Self::env_str("SERVER_SSL_KEY"),
 			filters: None,
+			actions: None,
+			rules: None,
 		}
 	}
 
@@ -262,17 +327,53 @@ impl RawConfig {
 		self.server_ssl_trust = self.server_ssl_trust.take().or(other.server_ssl_trust);
 		self.server_ssl_key = self.server_ssl_key.take().or(other.server_ssl_key);
 		self.filters = self.filters.take().or(other.filters);
+		self.actions = self.actions.take().or(other.actions);
+		self.rules = self.rules.take().or(other.rules);
 	}
 
-	fn get_filters(&self) -> Vec<ConfigFilter> {
+	fn get_filters(&self) -> HashMap<String,ConfigFilter> {
 		if self.filters.is_none() {
+			return HashMap::new();
+		}
+
+		let mut rv = HashMap::new();
+		let data = self.filters.as_ref().unwrap();
+		for k in data.keys() {
+			if let Some(v) = data.get(k) {
+				if let Some(cf) = ConfigFilter::parse(v) {
+					rv.insert(k.to_string(),cf);
+				}
+			}
+		}
+		return rv;
+	}
+
+	fn get_actions(&self) -> HashMap<String,ConfigAction> {
+		if self.actions.is_none() {
+			return HashMap::new();
+		}
+
+		let mut rv = HashMap::new();
+		let data = self.actions.as_ref().unwrap();
+		for k in data.keys() {
+			if let Some(v) = data.get(k) {
+				if let Some(ca) = ConfigAction::parse(v) {
+					rv.insert(k.to_string(),ca);
+				}
+			}
+		}
+		return rv;
+	}
+
+	fn get_rules(&self) -> Vec<ConfigRule> {
+		if self.rules.is_none() {
 			return Vec::new();
 		}
 
 		let mut rv = Vec::new();
-		for v in self.filters.as_ref().unwrap().values() {
-			if let Some(cf) = ConfigFilter::parse(v) {
-				rv.push(cf);
+		for v in self.rules.as_ref().unwrap().values() {
+			if let Some(cr) = ConfigRule::parse(v) {
+				rv.push(cr);
 			}
 		}
 		return rv;
@@ -344,21 +445,19 @@ pub struct Config {
 	server_ssl_trust: Option<PathBuf>,
 	server_ssl_key: Option<PathBuf>,
 
-	filters: Vec<ConfigFilter>,
+	filters: HashMap<String,ConfigFilter>,
+	actions: HashMap<String,ConfigAction>,
+	rules: Vec<ConfigRule>,
 }
 
 impl Config {
-	pub fn load(file: &str) -> Result<Self, Box<dyn Error>> {
+	pub fn load(content: &str) -> Result<Self, Box<dyn Error>> {
 		let mut raw_cfg = RawConfig::from_env();
-		let cfg_file = Path::new(file);
-		if cfg_file.exists() {
-			let content: String = fs::read_to_string(Path::new(file))?;
-			let file_cfg: RawConfig = match toml::from_str(&content) {
-				Ok(v) => v,
-				Err(err) => return Err(Box::from(format!("Config parsing error: {}", err)))
-			};
-			raw_cfg.merge(file_cfg);
-		}
+		let content_cfg: RawConfig = match toml::from_str(&content) {
+			Ok(v) => v,
+			Err(err) => return Err(Box::from(format!("Config parsing error: {}", err)))
+		};
+		raw_cfg.merge(content_cfg);
 
 		let remote = raw_cfg.remote.as_ref().expect("Missing main remote host in configuration");
 
@@ -375,35 +474,41 @@ impl Config {
 			server_ssl_trust: Self::parse_file(&raw_cfg.server_ssl_trust),
 			server_ssl_key: Self::parse_file(&raw_cfg.server_ssl_key),
 			filters: raw_cfg.get_filters(),
+			actions: raw_cfg.get_actions(),
+			rules: raw_cfg.get_rules(),
 		})
 	}
 
-	fn get_filters<'a>(&'a self, method: &Method, path: &Uri, headers: &HeaderMap) -> Vec<&'a ConfigFilter> {
+	fn get_actions<'a>(&'a self, method: &Method, path: &Uri, headers: &HeaderMap) -> Vec<&'a ConfigAction> {
 		let mut rv = Vec::new();
-		for f in self.filters.iter() {
-			if f.matches(method, path, headers) {
-				rv.push(f);
+		for rule in self.rules.iter() {
+			if rule.matches(&self.filters, method, path, headers) {
+				for aname in &rule.actions {
+					if let Some(act) = self.actions.get(aname) {
+						rv.push(act);
+					}
+				}
 			}
 		}
 		rv
 	}
 
 	pub fn get_ssl_mode(&self, method: &Method, path: &Uri, headers: &HeaderMap) -> SslMode {
-		self.get_filters(method, path, headers)
+		self.get_actions(method, path, headers)
 			.iter().find(|v| v.ssl_mode.is_some())
 			.and_then(|f| f.ssl_mode)
 			.unwrap_or(self.ssl_mode)
 	}
 
 	pub fn get_ca_file(&self, method: &Method, path: &Uri, headers: &HeaderMap) -> Option<PathBuf> {
-		self.get_filters(method, path, headers)
+		self.get_actions(method, path, headers)
 			.iter().find(|v| v.cafile.is_some())
 			.and_then(|f| f.cafile.clone())
 			.or(self.cafile.clone())
 	}
 
 	pub fn get_rewrite_host(&self, method: &Method, path: &Uri, headers: &HeaderMap) -> Option<String> {
-		let rewrite = self.get_filters(method, path, headers)
+		let rewrite = self.get_actions(method, path, headers)
 			.iter().find(|v| v.rewrite_host.is_some())
 			.and_then(|f| f.rewrite_host)
 			.unwrap_or(self.rewrite_host);
@@ -420,7 +525,7 @@ impl Config {
 	}
 
 	pub fn get_remote(&self, method: &Method, path: &Uri, headers: &HeaderMap) -> RemoteConfig {
-		self.get_filters(method, path, headers)
+		self.get_actions(method, path, headers)
 			.iter().find(|v| v.has_remote())
 			.and_then(|f| f.get_remote())
 			.unwrap_or(self.remote.clone())
@@ -431,21 +536,21 @@ impl Config {
 	}
 
 	pub fn log(&self, method: &Method, path: &Uri, headers: &HeaderMap) -> bool {
-		self.get_filters(method, path, headers)
+		self.get_actions(method, path, headers)
 			.iter().find(|v| v.log.is_some())
 			.and_then(|f| f.log)
 			.unwrap_or(self.log)
 	}
 
 	pub fn log_headers(&self, method: &Method, path: &Uri, headers: &HeaderMap) -> bool {
-		self.get_filters(method, path, headers)
+		self.get_actions(method, path, headers)
 			.iter().find(|v| v.log_headers.is_some())
 			.and_then(|f| f.log_headers)
 			.unwrap_or(self.log_headers)
 	}
 
 	pub fn log_request_body(&self, method: &Method, path: &Uri, headers: &HeaderMap) -> bool {
-		self.get_filters(method, path, headers)
+		self.get_actions(method, path, headers)
 			.iter().find(|v| v.log_request_body.is_some())
 			.and_then(|f| f.log_request_body)
 			.unwrap_or(self.log_request_body)

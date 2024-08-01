@@ -9,7 +9,7 @@ use std::future::Future;
 use hyper_util::rt::tokio::{TokioIo, TokioTimer};
 use tokio::signal::unix::{signal, SignalKind};
 use log::{debug,info,warn,error};
-use std::time::Duration;
+use std::{fs,path::Path,env,time::Duration};
 
 use pool::{remote_pool_key,remote_pool_get,remote_pool_release};
 use net::{Stream,Sender,GatewayBody};
@@ -91,7 +91,7 @@ impl Svc {
 	}
 
 
-	async fn forward(cfg: config::Config, req: Request<GatewayBody>) -> Result<Response<Incoming>,String> {
+	async fn forward(cfg: config::Config, req: Request<GatewayBody>, corr_id: &str) -> Result<Response<Incoming>,String> {
 		let hdrs = req.headers();
 
 		let mut remote_request = Request::builder()
@@ -101,7 +101,7 @@ impl Svc {
 		let mut host_done = false;
 		for (key, value) in hdrs.iter() {
 			if cfg.log_headers(req.method(), req.uri(), req.headers()) {
-				info!(" -> {:?}: {:?}", key, value);
+				info!("{} -> {:?}: {:?}", corr_id, key, value);
 			}
 			if key == "host" {
 				if let Some(repl) = cfg.get_rewrite_host(req.method(), req.uri(), req.headers()) {
@@ -185,13 +185,13 @@ impl Service<Request<Incoming>> for Svc {
 				body
 			});
 
-			match Self::forward(cfg, req).await {
+			match Self::forward(cfg, req, &corr_id).await {
 				Ok(remote_resp) => {
 					if simple_log {
 						info!("{}REPLY {:?} {:?}", corr_id, remote_resp.version(), remote_resp.status());
 					}
 					if log_headers {
-						remote_resp.headers().iter().for_each(|(k,v)| info!(" <- {:?}: {:?}", k, v));
+						remote_resp.headers().iter().for_each(|(k,v)| info!("{} <- {:?}: {:?}", corr_id, k, v));
 					}
 
 					Ok(remote_resp.map(|v| GatewayBody::wrap(v)))
@@ -221,20 +221,47 @@ async fn shutdown_signal_term() {
 		.await;
 }
 
+fn load_env(name: &str) -> Option<String> {
+	match env::var(name) {
+		Ok(v) => Some(v),
+		Err(_) => None
+	}
+}
+
+fn load_file(file: &str) -> Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
+	let path = Path::new(file);
+	if path.exists() {
+		Ok(Some(fs::read_to_string(Path::new(file))?))
+	} else {
+		Ok(None)
+	}
+}
+
 #[tokio::main]
 pub async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 	logcfg::init_logging();
 	let args: Vec<String> = std::env::args().collect();
 
-	let mut cfile = "config.toml";
-	if args.len() > 2 {
+	let default_cfile = "config.toml";
+	let config = if args.len() > 2 {
 		if args[1].eq("-f") {
-			cfile = &args[2];
+			let cfile = &args[2];
+			info!("Looking for configuration file {}", cfile);
+			load_file(cfile)?
+		} else if args[1].eq("-e") {
+			let cenv = &args[2];
+			info!("Looking for configuration in environment {}", cenv);
+			load_env(cenv)
+		} else {
+			info!("Looking for configuration file {}", default_cfile);
+			load_file(default_cfile)?
 		}
-	}
+	} else {
+		info!("Looking for configuration file {}", default_cfile);
+		load_file(default_cfile)?
+	}.unwrap_or("".to_string());
 
-	info!("Looking for configuration file {}", cfile);
-	let cfg = match config::Config::load(cfile) {
+	let cfg = match config::Config::load(&config) {
 		Ok(v) => v,
 		Err(e) => panic!("{}", e)
 	};

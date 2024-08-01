@@ -40,6 +40,9 @@ Main section values can be also specified as environment variables.
 
 This documentation, like the application itself, is still under development and for now you won't get all the details here, but the two values you always need to specify are **bind** and **remote** which are, respectively, the bind address for the listening socket and the url of the proxied application.
 
+Exceptions to the default configurations are specified via *rules*, *actions* and *filters*.
+Actions represent behavior flags for a single request, while filters are used to match a request. Rules are made of composition of filters and actions.
+
 ### Configuration samples
 
 Minimal configuration:
@@ -62,7 +65,13 @@ Log request payload for POSTs on a specific path and all headers on every reques
 	log_headers = true
 
 	[filters]
-	f1 = { path = "^/Shibboleth.sso/SAML/POST$", method = "POST", log_request_body = true }
+	post_on_saml = { path = "^/Shibboleth.sso/SAML/POST$", method = "POST" }
+
+	[actions]
+	log_payload = { log_request_body = true }
+
+	[rules]
+	r1 = { filters = [ "post_on_saml" ], actions = [ "log_payload" ] }
 
 Redirect traffic having a specific header to a different endpoint:
 
@@ -71,6 +80,12 @@ Redirect traffic having a specific header to a different endpoint:
 	log_headers = true
 
 	[filters]
-	f1 = { headers = { X-Api-Key = "^SOME-SECRET$" }, remote = "http://private-server/" }
+	has_api_key = { headers = { X-Api-Key = "^SOME-SECRET$" } }
+
+	[actions]
+	redirect = { remote = "http://private-server/" }
+
+	[rules]
+	r1 = { filters = [ "has_api_key" ], actions = [ "redirect" ] }
 
 
