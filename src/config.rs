@@ -4,9 +4,9 @@ use std::{env,error::Error,collections::HashMap};
 use serde::Deserialize;
 use std::time::Duration;
 use std::net::{ToSocketAddrs, SocketAddr};
-use hyper::{Method,Uri,header::HeaderMap};
+use hyper::{Method,Uri,header::HeaderMap,StatusCode};
 use regex::Regex;
-use log::warn;
+use log::{info,warn};
 
 #[derive(Clone)]
 pub struct RemoteConfig {
@@ -178,6 +178,7 @@ pub struct ConfigAction {
 	log: Option<bool>,
 	log_headers: Option<bool>,
 	log_request_body: Option<bool>,
+	log_reply_body: Option<bool>,
 	ssl_mode: Option<SslMode>,
 	cafile: Option<PathBuf>,
 }
@@ -191,6 +192,7 @@ impl ConfigAction {
 				log: t.get("log").and_then(|v| v.as_bool()),
 				log_headers: t.get("log_headers").and_then(|v| v.as_bool()),
 				log_request_body: t.get("log_request_body").and_then(|v| v.as_bool()),
+				log_reply_body: t.get("log_reply_body").and_then(|v| v.as_bool()),
 				cafile: t.get("cafile").and_then(|v| v.as_str()).map(|v| Path::new(v).to_path_buf()),
 				ssl_mode: t.get("ssl_mode").and_then(|v| v.as_str()).map(|v| v.to_string().into())
 			}),
@@ -204,6 +206,7 @@ impl ConfigAction {
 		self.log = self.log.take().or(other.log);
 		self.log_headers = self.log_headers.take().or(other.log_headers);
 		self.log_request_body = self.log_request_body.take().or(other.log_request_body);
+		self.log_reply_body = self.log_reply_body.take().or(other.log_reply_body);
 		self.cafile = self.cafile.take().or(other.cafile.clone());
 		self.ssl_mode = self.ssl_mode.take().or(other.ssl_mode);
 	}
@@ -242,6 +245,10 @@ impl ConfigAction {
 		self.log_request_body.unwrap_or(false)
 	}
 
+	pub fn log_reply_body(&self) -> bool {
+		self.log_reply_body.unwrap_or(false)
+	}
+
 	pub fn client_version(&self) -> HttpVersionMode {
 		HttpVersionMode::V1 // TODO
 	}
@@ -249,8 +256,14 @@ impl ConfigAction {
 
 #[derive(Clone)]
 struct ConfigRule {
+	name: String,
 	filters: Vec<String>,
 	actions: Vec<String>,
+	enabled: bool,
+	disable_on: Option<Regex>,
+	probability: Option<f64>,
+	max_life: Option<u64>,
+	consumed: u64,
 }
 
 impl ConfigRule {
@@ -269,29 +282,83 @@ impl ConfigRule {
 		data
 	}
 
-	fn parse(v: &toml::Value) -> Option<ConfigRule> {
+	fn parse(name: String, v: &toml::Value) -> Option<ConfigRule> {
 		match v {
 			toml::Value::Table(t) => Some(ConfigRule {
+				name: name,
 				filters: Self::load_vec(t, "filter", "filters"),
 				actions: Self::load_vec(t, "action", "actions"),
+				enabled: t.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true),
+				probability: t.get("probability").and_then(|v| v.as_float()),
+				disable_on: t.get("disable_on")
+					.and_then(|v| v.as_str())
+					.and_then(|v| match Regex::new(v) {
+						Ok(r) => Some(r),
+						Err(e) => {
+							warn!("Invalid disable_on regex in configuration \"{}\": {:?}", v, e);
+							None
+						},
+					}),
+				max_life: t.get("max_life").and_then(|v| v.as_integer()).and_then(|v| Some(v as u64)),
+				consumed: 0u64,
 			}),
 			_ => None,
 		}
 	}
 
 	fn matches(&self, filters: &HashMap<String,ConfigFilter>, method: &Method, path: &Uri, headers: &HeaderMap) -> bool {
+		if !self.enabled {
+			return false;
+		}
 		if self.filters.is_empty() || self.actions.is_empty() {
 			return false;
 		}
 
+		let mut rv = false;
 		for f in &self.filters {
 			if let Some(cfilter) = filters.get(f) {
 				if cfilter.matches(method, path, headers) {
-					return true;
+					rv = true;
+					break;
 				}
 			}
 		}
-		false
+
+		if rv {
+			if let Some(prob) = self.probability {
+				if crate::random::gen() > prob {
+					rv = false;
+				}
+			}
+		}
+
+		rv
+	}
+
+	fn consume(&mut self) {
+		if !self.enabled {
+			return;
+		}
+		if let Some(life) = self.max_life {
+			self.consumed += 1;
+			if self.consumed >= life {
+				info!("Disabling rule {} due to max_life reached", &self.name);
+				self.enabled = false;
+			}
+		}
+	}
+
+	fn notify_reply(&mut self, status: &StatusCode) {
+		if !self.enabled {
+			return;
+		}
+		if let Some(check) = &self.disable_on {
+			let status_str = format!("{:?}", status);
+			if check.is_match(&status_str) {
+				info!("Disabling rule {} due to reply status {}", &self.name, status_str);
+				self.enabled = false;
+			}
+		}
 	}
 }
 
@@ -306,6 +373,7 @@ struct RawConfig {
 	log: Option<bool>,
 	log_headers: Option<bool>,
 	log_request_body: Option<bool>,
+	log_reply_body: Option<bool>,
 	server_ssl_trust: Option<String>,
 	server_ssl_key: Option<String>,
 	filters: Option<toml::Table>,
@@ -322,9 +390,10 @@ impl RawConfig {
 			graceful_shutdown_timeout: Self::env_str("GRACEFUL_SHUTDOWN_TIMEOUT"),
 			ssl_mode: Self::env_str("SSL_MODE"),
 			cafile: Self::env_str("CAFILE"),
-			log: Self::env_bool("LOG"),
-			log_headers: Self::env_bool("LOG_HEADERS"),
-			log_request_body: Self::env_bool("LOG_REQUEST_BODY"),
+			log: None,
+			log_headers: None,
+			log_request_body: None,
+			log_reply_body: None,
 			server_ssl_trust: Self::env_str("SERVER_SSL_TRUST"),
 			server_ssl_key: Self::env_str("SERVER_SSL_KEY"),
 			filters: None,
@@ -364,6 +433,7 @@ impl RawConfig {
 		self.log = self.log.take().or(other.log);
 		self.log_headers = self.log_headers.take().or(other.log_headers);
 		self.log_request_body = self.log_request_body.take().or(other.log_request_body);
+		self.log_reply_body = self.log_reply_body.take().or(other.log_reply_body);
 		self.server_ssl_trust = self.server_ssl_trust.take().or(other.server_ssl_trust);
 		self.server_ssl_key = self.server_ssl_key.take().or(other.server_ssl_key);
 		self.filters = self.filters.take().or(other.filters);
@@ -378,11 +448,9 @@ impl RawConfig {
 
 		let mut rv = HashMap::new();
 		let data = self.filters.as_ref().unwrap();
-		for k in data.keys() {
-			if let Some(v) = data.get(k) {
-				if let Some(cf) = ConfigFilter::parse(v) {
-					rv.insert(k.to_string(),cf);
-				}
+		for (k,v) in data.iter() {
+			if let Some(cf) = ConfigFilter::parse(v) {
+				rv.insert(k.to_string(),cf);
 			}
 		}
 		return rv;
@@ -395,25 +463,24 @@ impl RawConfig {
 
 		let mut rv = HashMap::new();
 		let data = self.actions.as_ref().unwrap();
-		for k in data.keys() {
-			if let Some(v) = data.get(k) {
-				if let Some(ca) = ConfigAction::parse(v) {
-					rv.insert(k.to_string(),ca);
-				}
+		for (k,v) in data.iter() {
+			if let Some(ca) = ConfigAction::parse(v) {
+				rv.insert(k.to_string(),ca);
 			}
 		}
 		return rv;
 	}
 
-	fn get_rules(&self) -> Vec<ConfigRule> {
+	fn get_rules(&self) -> HashMap<String,ConfigRule> {
 		if self.rules.is_none() {
-			return Vec::new();
+			return HashMap::new();
 		}
 
-		let mut rv = Vec::new();
-		for v in self.rules.as_ref().unwrap().values() {
-			if let Some(cr) = ConfigRule::parse(v) {
-				rv.push(cr);
+		let mut rv = HashMap::new();
+		let data = self.rules.as_ref().unwrap();
+		for (k,v) in data.iter() {
+			if let Some(cr) = ConfigRule::parse(k.to_string(), v) {
+				rv.insert(k.to_string(), cr);
 			}
 		}
 		return rv;
@@ -480,7 +547,7 @@ pub struct Config {
 	default_action: ConfigAction,
 	filters: HashMap<String,ConfigFilter>,
 	actions: HashMap<String,ConfigAction>,
-	rules: Vec<ConfigRule>,
+	rules: HashMap<String,ConfigRule>,
 }
 
 impl Config {
@@ -503,6 +570,7 @@ impl Config {
 				log: raw_cfg.log,
 				log_headers: raw_cfg.log_headers,
 				log_request_body: raw_cfg.log_request_body,
+				log_reply_body: raw_cfg.log_reply_body,
 			},
 			bind: Self::parse_bind(&raw_cfg),
 			graceful_shutdown_timeout: Self::parse_graceful_shutdown_timeout(&raw_cfg),
@@ -514,27 +582,41 @@ impl Config {
 		})
 	}
 
-	fn get_actions<'a>(&'a self, method: &Method, path: &Uri, headers: &HeaderMap) -> Vec<&'a ConfigAction> {
-		let mut rv = Vec::new();
-		for rule in self.rules.iter() {
-			if rule.matches(&self.filters, method, path, headers) {
-				for aname in &rule.actions {
-					if let Some(act) = self.actions.get(aname) {
-						rv.push(act);
-					}
+	fn get_actions<'a>(&'a mut self, method: &Method, path: &Uri, headers: &HeaderMap) -> (Vec<&'a ConfigAction>,Vec<String>) {
+		let mut actions = Vec::new();
+		let mut rulenames = Vec::new();
+
+		for (rulename,rule) in self.rules.iter_mut() {
+			if ! rule.matches(&self.filters, method, path, headers) {
+				continue;
+			}
+			rule.consume();
+			rulenames.push(rulename.clone());
+			for aname in &rule.actions {
+				if let Some(act) = self.actions.get(aname) {
+					actions.push(act);
 				}
 			}
 		}
-		rv.push(&self.default_action);
-		rv
+		actions.push(&self.default_action);
+		(actions, rulenames)
 	}
 
-	pub fn get_action_for_request(&self, method: &Method, path: &Uri, headers: &HeaderMap) -> ConfigAction {
+	pub fn get_request_config(&mut self, method: &Method, path: &Uri, headers: &HeaderMap) -> (ConfigAction,Vec<String>) {
 		let mut rv = ConfigAction::default();
-		for act in self.get_actions(method, path, headers) {
+		let (actions, rulenames) = self.get_actions(method, path, headers);
+		for act in actions {
 			rv.merge(act);
 		}
-		rv
+		(rv, rulenames)
+	}
+
+	pub fn notify_reply(&mut self, rulenames: Vec<String>, status: &StatusCode) {
+		for rule in rulenames {
+			if let Some(r) = self.rules.get_mut(&rule) {
+				r.notify_reply(status);
+			}
+		}
 	}
 
 	pub fn get_graceful_shutdown_timeout(&self) -> Duration {

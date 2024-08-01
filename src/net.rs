@@ -43,7 +43,7 @@ pub struct GatewayBody {
 	incoming: Option<Incoming>,
 	frames: Vec<hyper::body::Bytes>,
 	save_payload: bool,
-	corr_id: String,
+	log_prefix: String,
 }
 impl GatewayBody {
 	pub fn empty() -> GatewayBody {
@@ -51,7 +51,7 @@ impl GatewayBody {
 			incoming: None,
 			frames: Vec::new(),
 			save_payload: false,
-			corr_id: "".to_string(),
+			log_prefix: "".to_string(),
 		}
 	}
 	pub fn wrap(inner: Incoming) -> GatewayBody {
@@ -59,13 +59,13 @@ impl GatewayBody {
 			incoming: Some(inner),
 			frames: Vec::new(),
 			save_payload: false,
-			corr_id: "".to_string(),
+			log_prefix: "".to_string(),
 		}
 	}
 
-	pub fn log_payload(&mut self, value: bool, corr_id: String) {
+	pub fn log_payload(&mut self, value: bool, log_prefix: String) {
 		self.save_payload = value;
-		self.corr_id = corr_id;
+		self.log_prefix = log_prefix;
 	}
 
 	fn add_frame(&mut self, frame: &hyper::body::Bytes) {
@@ -78,9 +78,9 @@ impl GatewayBody {
 		if self.save_payload {
 			let log = String::from_utf8(self.frames.clone().concat()).unwrap_or("DECODE-ERROR".to_string());
 			if log.is_empty() {
-				info!("{}EMPTY BODY", self.corr_id);
+				info!("{}EMPTY BODY", self.log_prefix);
 			} else {
-				info!("{}BODY: {}", self.corr_id, log);
+				info!("{}BODY: {}", self.log_prefix, log);
 			}
 		}
 	}

@@ -1,11 +1,12 @@
 
 use hyper::server::conn::http1;
 use hyper::body::Incoming;
-use hyper::{Request, Response};
+use hyper::{Request,Response};
 use tokio::net::{TcpStream,TcpListener};
 use hyper::service::Service;
 use std::pin::Pin;
 use std::future::Future;
+use std::sync::{Arc,Mutex};
 use hyper_util::rt::tokio::{TokioIo, TokioTimer};
 use tokio::signal::unix::{signal, SignalKind};
 use log::{debug,info,warn,error};
@@ -16,6 +17,7 @@ use net::{Stream,Sender,GatewayBody};
 use config::SslData;
 
 mod pool;
+mod random;
 mod config;
 mod ssl;
 mod logcfg;
@@ -45,12 +47,16 @@ macro_rules! config_socket {
 
 #[derive(Clone)]
 struct Svc {
-	cfg: config::Config,
+	cfg: Arc<Mutex<config::Config>>,
+	original_cfg: config::Config,
 }
 
 impl Svc {
 	fn new(cfg: config::Config) -> Self {
-		Self { cfg }
+		Self {
+			cfg: Arc::new(Mutex::new(cfg.clone())),
+			original_cfg: cfg,
+		}
 	}
 
 	async fn connect(address: (String,u16), ssldata: SslData, remote: &config::RemoteConfig) -> Result<Box<dyn Stream>,String> {
@@ -159,11 +165,19 @@ impl Service<Request<Incoming>> for Svc {
 		let uri = req.uri().clone();
 		let method = req.method().clone();
 		let headers = req.headers().clone();
-		let cfg = self.cfg.get_action_for_request(&method, &uri, &headers);
+		let cfg_local = self.cfg.clone();
+
+		let (cfg,rules) = (*cfg_local.lock().unwrap_or_else(|mut e| {
+		    **e.get_mut() = self.original_cfg.clone();
+		    cfg_local.clear_poison();
+    		e.into_inner()
+		})).get_request_config(&method, &uri, &headers);
 
 		Box::pin(async move {
 			let simple_log = cfg.log();
 			let log_headers = cfg.log_headers();
+			let log_reply_body = cfg.log_reply_body();
+
 
 			let corr_id = if simple_log {
 				format!("{:?} ", uuid::Uuid::new_v4())
@@ -173,24 +187,43 @@ impl Service<Request<Incoming>> for Svc {
 
 			if simple_log {
 				info!("{}REQUEST {:?} {} {} {}", corr_id, req.version(), method, uri.path(), uri.query().unwrap_or("-"));
+				if rules.is_empty() {
+					debug!("{}No rules found", corr_id);
+				} else {
+					debug!("{}Using rules: {}", corr_id, rules.join(","));
+				}
 			}
 
 			let req = req.map(|v| {
 				let mut body = GatewayBody::wrap(v);
-				body.log_payload(cfg.log_request_body(), corr_id.clone());
+				if cfg.log_request_body() {
+					body.log_payload(true, format!("{}REQUEST ", corr_id));
+				}
 				body
 			});
 
 			match Self::forward(cfg, req, &corr_id).await {
 				Ok(remote_resp) => {
+					let status = remote_resp.status();
+
+					if let Ok(mut locked) = cfg_local.lock() {
+						locked.notify_reply(rules, &status);
+					}
+
 					if simple_log {
-						info!("{}REPLY {:?} {:?}", corr_id, remote_resp.version(), remote_resp.status());
+						info!("{}REPLY {:?} {:?}", corr_id, remote_resp.version(), status);
 					}
 					if log_headers {
 						remote_resp.headers().iter().for_each(|(k,v)| info!("{} <- {:?}: {:?}", corr_id, k, v));
 					}
 
-					Ok(remote_resp.map(|v| GatewayBody::wrap(v)))
+					Ok(remote_resp.map(|v| {
+						let mut body = GatewayBody::wrap(v);
+						if log_reply_body {
+							body.log_payload(true, format!("{}REPLY ", corr_id));
+						}
+						body
+					}))
 				},
 				Err(e) => {
 					error!("Call forward failed: {:?}", e);
