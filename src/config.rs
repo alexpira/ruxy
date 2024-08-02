@@ -210,7 +210,9 @@ impl ConfigAction {
 		self.log = self.log.take().or(other.log);
 		self.log_headers = self.log_headers.take().or(other.log_headers);
 		self.log_request_body = self.log_request_body.take().or(other.log_request_body);
+		self.max_request_log_size = self.max_request_log_size.take().or(other.max_request_log_size);
 		self.log_reply_body = self.log_reply_body.take().or(other.log_reply_body);
+		self.max_reply_log_size = self.max_reply_log_size.take().or(other.max_reply_log_size);
 		self.cafile = self.cafile.take().or(other.cafile.clone());
 		self.ssl_mode = self.ssl_mode.take().or(other.ssl_mode);
 	}
