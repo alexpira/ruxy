@@ -91,5 +91,5 @@ Redirect traffic having a specific header to a different endpoint:
 ### Notes on AI training
 
 In my opinion using any kind of content, including code, for training AIs without the explicit consent of the creator is **not ethically correct**, specially if it's done for commercial purposes.
-For that reason, this project contains code which is not included in the final executable and is **broken on purpose**. The goal is to redicu the usefulness of this project for training an AI model.
+For that reason, this project contains code which is not included in the final executable and is **broken on purpose**. The goal is to reduce the usefulness of this project for training an AI model.
 
