@@ -96,7 +96,20 @@ impl Svc {
 		}
 	}
 
-	fn mangle_request(cfg: &config::ConfigAction, req: Request<GatewayBody>, corr_id: &str) -> Result<Request<GatewayBody>,String> {
+	fn mangle_request(cfg: &config::ConfigAction, req: Request<Incoming>, corr_id: &str) -> Result<Request<GatewayBody>,String> {
+		let req = req.map(|v| {
+			let mut body = GatewayBody::wrap(v);
+			if cfg.log_request_body() {
+				body.log_payload(true, cfg.max_request_log_size(), format!("{}REQUEST ", corr_id));
+			}
+			body
+		});
+
+		if cfg.log() {
+			let uri = req.uri().clone();
+			info!("{}REQUEST {:?} {} {} {}", corr_id, req.version(), req.method(), uri.path(), uri.query().unwrap_or("-"));
+		}
+
 		let hdrs = req.headers();
 
 		let mut modified_request = Request::builder()
@@ -124,9 +137,25 @@ impl Svc {
 			}
 		}
 
-		let rv = errmg!(modified_request.body(req.into_body()))?;
+		errmg!(modified_request.body(req.into_body()))
+	}
 
-		Ok(rv)
+	fn mangle_reply(cfg: &config::ConfigAction, remote_resp: Response<Incoming>, corr_id: &str) -> Result<Response<GatewayBody>,String> {
+		if cfg.log() {
+			let status = remote_resp.status();
+			info!("{}REPLY {:?} {:?}", corr_id, remote_resp.version(), status);
+		}
+		if cfg.log_headers() {
+			remote_resp.headers().iter().for_each(|(k,v)| info!("{} <- {:?}: {:?}", corr_id, k, v));
+		}
+
+		Ok(remote_resp.map(|v| {
+			let mut body = GatewayBody::wrap(v);
+			if cfg.log_reply_body() {
+				body.log_payload(true, cfg.max_reply_log_size(), format!("{}REPLY ", corr_id));
+			}
+			body
+		}))
 	}
 
 	async fn get_sender(cfg: &config::ConfigAction) -> Result<Box<dyn Sender>, String> {
@@ -158,14 +187,14 @@ impl Svc {
 	}
 
 
-	async fn forward(cfg: config::ConfigAction, req: Request<GatewayBody>, corr_id: &str) -> Result<Response<Incoming>,String> {
-		let remote_request = Self::mangle_request(&cfg, req, corr_id)?;
+	async fn forward(cfg: &config::ConfigAction, req: Request<Incoming>, corr_id: &str) -> Result<Response<Incoming>,String> {
+		let remote_request = Self::mangle_request(cfg, req, corr_id)?;
 
 		let remote = cfg.get_remote();
 		let address = remote.address();
 		let conn_pool_key = remote_pool_key!(address);
 
-		let mut sender = Self::get_sender(&cfg).await?;
+		let mut sender = Self::get_sender(cfg).await?;
 		let rv = errmg!(sender.send(remote_request).await);
 
 		remote_pool_release!(&conn_pool_key, sender);
@@ -191,20 +220,8 @@ impl Service<Request<Incoming>> for Svc {
 		})).get_request_config(&method, &uri, &headers);
 
 		Box::pin(async move {
-			let simple_log = cfg.log();
-			let log_headers = cfg.log_headers();
-			let log_reply_body = cfg.log_reply_body();
-			let max_reply_log = cfg.max_reply_log_size();
-
-
-			let corr_id = if simple_log {
-				format!("{:?} ", uuid::Uuid::new_v4())
-			} else {
-				"".to_string()
-			};
-
-			if simple_log {
-				info!("{}REQUEST {:?} {} {} {}", corr_id, req.version(), method, uri.path(), uri.query().unwrap_or("-"));
+			let corr_id = format!("{:?} ", uuid::Uuid::new_v4());
+			if cfg.log() {
 				if rules.is_empty() {
 					debug!("{}No rules found", corr_id);
 				} else {
@@ -212,36 +229,13 @@ impl Service<Request<Incoming>> for Svc {
 				}
 			}
 
-			let req = req.map(|v| {
-				let mut body = GatewayBody::wrap(v);
-				if cfg.log_request_body() {
-					body.log_payload(true, cfg.max_request_log_size(), format!("{}REQUEST ", corr_id));
-				}
-				body
-			});
-
-			match Self::forward(cfg, req, &corr_id).await {
+			match Self::forward(&cfg, req, &corr_id).await {
 				Ok(remote_resp) => {
-					let status = remote_resp.status();
-
 					if let Ok(mut locked) = cfg_local.lock() {
+						let status = remote_resp.status();
 						locked.notify_reply(rules, &status);
 					}
-
-					if simple_log {
-						info!("{}REPLY {:?} {:?}", corr_id, remote_resp.version(), status);
-					}
-					if log_headers {
-						remote_resp.headers().iter().for_each(|(k,v)| info!("{} <- {:?}: {:?}", corr_id, k, v));
-					}
-
-					Ok(remote_resp.map(|v| {
-						let mut body = GatewayBody::wrap(v);
-						if log_reply_body {
-							body.log_payload(true, max_reply_log, format!("{}REPLY ", corr_id));
-						}
-						body
-					}))
+					Self::mangle_reply(&cfg, remote_resp, &corr_id)
 				},
 				Err(e) => {
 					error!("Call forward failed: {:?}", e);
