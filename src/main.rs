@@ -13,7 +13,7 @@ use log::{debug,info,warn,error};
 use std::{fs,path::Path,env,time::Duration};
 
 use pool::{remote_pool_key,remote_pool_get,remote_pool_release};
-use net::{Stream,Sender,GatewayBody};
+use net::{Stream,Sender,GatewayBody,keepalive,config_socket};
 use config::SslData;
 
 mod pool;
@@ -29,20 +29,9 @@ macro_rules! errmg {
 	}
 }
 
-macro_rules! keepalive {
-	($arg: expr) => {
-		tokio::task::spawn(async move {
-			if let Err(err) = $arg.await {
-				warn!("Connection failed: {:?}", err);
-			}
-		});
-	}
-}
-
-macro_rules! config_socket {
-	($sock: expr) => {
-		$sock.set_linger(Some(Duration::from_secs(0))).unwrap_or_else(|err| { warn!("{}:{} Failed to set SO_LINGER on socket: {:?}", file!(), line!(), err); () });
-	}
+struct CachedSender {
+	key: String,
+	value: Box<dyn Sender>,
 }
 
 #[derive(Clone)]
@@ -158,7 +147,7 @@ impl Svc {
 		}))
 	}
 
-	async fn get_sender(cfg: &config::ConfigAction) -> Result<Box<dyn Sender>, String> {
+	async fn get_sender(cfg: &config::ConfigAction) -> Result<CachedSender, String> {
 		let remote = cfg.get_remote();
 		let address = remote.address();
 		let conn_pool_key = remote_pool_key!(address);
@@ -183,21 +172,19 @@ impl Svc {
 			errmg!(Self::handshake(io, httpver).await)?
 		};
 
-		Ok(sender)
+		Ok(CachedSender {
+			key: conn_pool_key,
+			value: sender,
+		})
 	}
 
 
 	async fn forward(cfg: &config::ConfigAction, req: Request<Incoming>, corr_id: &str) -> Result<Response<Incoming>,String> {
 		let remote_request = Self::mangle_request(cfg, req, corr_id)?;
-
-		let remote = cfg.get_remote();
-		let address = remote.address();
-		let conn_pool_key = remote_pool_key!(address);
-
 		let mut sender = Self::get_sender(cfg).await?;
-		let rv = errmg!(sender.send(remote_request).await);
+		let rv = errmg!(sender.value.send(remote_request).await);
 
-		remote_pool_release!(&conn_pool_key, sender);
+		remote_pool_release!(&sender.key, sender.value);
 		rv
 	}
 }

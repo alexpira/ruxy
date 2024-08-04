@@ -157,3 +157,21 @@ impl hyper::body::Body for GatewayBody {
 	}
 }
 
+macro_rules! keepalive {
+	($arg: expr) => {
+		tokio::task::spawn(async move {
+			if let Err(err) = $arg.await {
+				warn!("Connection failed: {:?}", err);
+			}
+		});
+	}
+}
+pub(crate) use keepalive;
+
+macro_rules! config_socket {
+	($sock: expr) => {
+		$sock.set_linger(Some(Duration::from_secs(0))).unwrap_or_else(|err| { warn!("{}:{} Failed to set SO_LINGER on socket: {:?}", file!(), line!(), err); () });
+	}
+}
+pub(crate) use config_socket;
+
