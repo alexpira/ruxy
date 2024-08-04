@@ -96,41 +96,45 @@ impl Svc {
 		}
 	}
 
-
-	async fn forward(cfg: config::ConfigAction, req: Request<GatewayBody>, corr_id: &str) -> Result<Response<Incoming>,String> {
+	fn mangle_request(cfg: &config::ConfigAction, req: Request<GatewayBody>, corr_id: &str) -> Result<Request<GatewayBody>,String> {
 		let hdrs = req.headers();
 
-		let mut remote_request = Request::builder()
+		let mut modified_request = Request::builder()
 			.method(req.method())
 			.uri(req.uri());
 
 		let mut host_done = false;
+		let loghdr = cfg.log_headers();
 		for (key, value) in hdrs.iter() {
-			if cfg.log_headers() {
+			if loghdr {
 				info!("{} -> {:?}: {:?}", corr_id, key, value);
 			}
 			if key == "host" {
 				if let Some(repl) = cfg.get_rewrite_host() {
-					remote_request = remote_request.header(key, repl);
+					modified_request = modified_request.header(key, repl);
 					host_done = true;
 					continue;
 				}
 			}
-			remote_request = remote_request.header(key, value);
+			modified_request = modified_request.header(key, value);
 		}
 		if !host_done {
 			if let Some(repl) = cfg.get_rewrite_host() {
-				remote_request = remote_request.header("host", repl);
+				modified_request = modified_request.header("host", repl);
 			}
 		}
 
+		let rv = errmg!(modified_request.body(req.into_body()))?;
+
+		Ok(rv)
+	}
+
+	async fn get_sender(cfg: &config::ConfigAction) -> Result<Box<dyn Sender>, String> {
 		let remote = cfg.get_remote();
 		let address = remote.address();
 		let conn_pool_key = remote_pool_key!(address);
 		let httpver = cfg.client_version();
 		let ssldata: SslData = (cfg.get_ssl_mode(), httpver, cfg.get_ca_file());
-
-		let remote_request = errmg!(remote_request.body(req.into_body()))?;
 
 		let sender = if let Some(mut pool) = remote_pool_get!(&conn_pool_key) {
 			if pool.check().await {
@@ -142,7 +146,7 @@ impl Svc {
 			None
 		};
 
-		let mut sender = if let Some(v) = sender {
+		let sender = if let Some(v) = sender {
 			v
 		} else {
 			let stream = errmg!(Self::connect(address, ssldata, &remote).await)?;
@@ -150,7 +154,20 @@ impl Svc {
 			errmg!(Self::handshake(io, httpver).await)?
 		};
 
+		Ok(sender)
+	}
+
+
+	async fn forward(cfg: config::ConfigAction, req: Request<GatewayBody>, corr_id: &str) -> Result<Response<Incoming>,String> {
+		let remote_request = Self::mangle_request(&cfg, req, corr_id)?;
+
+		let remote = cfg.get_remote();
+		let address = remote.address();
+		let conn_pool_key = remote_pool_key!(address);
+
+		let mut sender = Self::get_sender(&cfg).await?;
 		let rv = errmg!(sender.send(remote_request).await);
+
 		remote_pool_release!(&conn_pool_key, sender);
 		rv
 	}
