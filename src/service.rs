@@ -1,11 +1,14 @@
 
 use hyper::body::Incoming;
-use hyper::{Request,Response};
+use hyper::{Request,Response,StatusCode};
 use tokio::net::TcpStream;
 use hyper::service::Service;
 use std::pin::Pin;
 use std::future::Future;
 use std::sync::{Arc,Mutex};
+use std::error::Error;
+use std::fmt;
+use std::fmt::Debug;
 use hyper_util::rt::tokio::TokioIo;
 use log::{debug,info,warn,error};
 use std::time::Duration;
@@ -14,9 +17,47 @@ use crate::pool::{remote_pool_key,remote_pool_get,remote_pool_release};
 use crate::net::{Stream,Sender,GatewayBody,keepalive,config_socket};
 use crate::config::{Config,RemoteConfig,ConfigAction,HttpVersionMode,SslData};
 
+pub struct ServiceError {
+	message: String,
+	status: StatusCode,
+	body: GatewayBody,
+}
+
+impl fmt::Display for ServiceError {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		write!(f, "{}", self.message)
+	}
+}
+
+impl Debug for ServiceError {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		write!(f, "{}", self.message)
+	}
+}
+
+impl Error for ServiceError {
+	fn source(&self) -> Option<&(dyn Error + 'static)> {
+		None
+	}
+}
+
+impl From<String> for ServiceError {
+	fn from(message: String) -> Self {
+		Self {
+			message: message,
+			status: StatusCode::BAD_GATEWAY,
+			body: GatewayBody::empty(),
+		}
+	}
+}
+
 macro_rules! errmg {
 	($arg: expr) => {
-		($arg).map_err(|e| format!("{:?} at {}:{}", e, file!(), line!()))
+		($arg).map_err(|e| ServiceError {
+			message: format!("{:?} at {}:{}", e, file!(), line!()),
+			status: StatusCode::BAD_GATEWAY,
+			body: GatewayBody::empty(),
+		})
 	}
 }
 
@@ -39,7 +80,7 @@ impl GatewayService {
 		}
 	}
 
-	async fn connect(address: (String,u16), ssldata: SslData, remote: &RemoteConfig) -> Result<Box<dyn Stream>,String> {
+	async fn connect(address: (String,u16), ssldata: SslData, remote: &RemoteConfig) -> Result<Box<dyn Stream>, ServiceError> {
 		if remote.ssl() {
 			let stream = errmg!(TcpStream::connect(address).await)?;
 			config_socket!(stream);
@@ -52,7 +93,7 @@ impl GatewayService {
 		}
 	}
 
-	async fn handshake(io: TokioIo<Box<dyn Stream>>, httpver: HttpVersionMode) -> Result<Box<dyn Sender>, String> {
+	async fn handshake(io: TokioIo<Box<dyn Stream>>, httpver: HttpVersionMode) -> Result<Box<dyn Sender>, ServiceError> {
 		match httpver {
 			HttpVersionMode::V1 => {
 				let (sender, conn) = errmg!(hyper::client::conn::http1::handshake(io).await)?;
@@ -76,7 +117,7 @@ impl GatewayService {
 		}
 	}
 
-	fn mangle_request(cfg: &ConfigAction, req: Request<Incoming>, corr_id: &str) -> Result<Request<GatewayBody>,String> {
+	fn mangle_request(cfg: &ConfigAction, req: Request<Incoming>, corr_id: &str) -> Result<Request<GatewayBody>, ServiceError> {
 		let req = req.map(|v| {
 			let mut body = GatewayBody::wrap(v);
 			if cfg.log_request_body() {
@@ -120,7 +161,7 @@ impl GatewayService {
 		errmg!(modified_request.body(req.into_body()))
 	}
 
-	fn mangle_reply(cfg: &ConfigAction, remote_resp: Response<Incoming>, corr_id: &str) -> Result<Response<GatewayBody>,String> {
+	fn mangle_reply(cfg: &ConfigAction, remote_resp: Response<Incoming>, corr_id: &str) -> Result<Response<GatewayBody>, ServiceError> {
 		if cfg.log() {
 			let status = remote_resp.status();
 			info!("{}REPLY {:?} {:?}", corr_id, remote_resp.version(), status);
@@ -138,7 +179,7 @@ impl GatewayService {
 		}))
 	}
 
-	async fn get_sender(cfg: &ConfigAction) -> Result<CachedSender, String> {
+	async fn get_sender(cfg: &ConfigAction) -> Result<CachedSender, ServiceError> {
 		let remote = cfg.get_remote();
 		let address = remote.address();
 		let conn_pool_key = remote_pool_key!(address);
@@ -158,9 +199,9 @@ impl GatewayService {
 		let sender = if let Some(v) = sender {
 			v
 		} else {
-			let stream = errmg!(Self::connect(address, ssldata, &remote).await)?;
+			let stream = Self::connect(address, ssldata, &remote).await?;
 			let io = TokioIo::new( stream );
-			errmg!(Self::handshake(io, httpver).await)?
+			Self::handshake(io, httpver).await?
 		};
 
 		Ok(CachedSender {
@@ -169,8 +210,7 @@ impl GatewayService {
 		})
 	}
 
-
-	async fn forward(cfg: &ConfigAction, req: Request<Incoming>, corr_id: &str) -> Result<Response<Incoming>,String> {
+	async fn forward(cfg: &ConfigAction, req: Request<Incoming>, corr_id: &str) -> Result<Response<Incoming>, ServiceError> {
 		let remote_request = Self::mangle_request(cfg, req, corr_id)?;
 		let mut sender = Self::get_sender(cfg).await?;
 		let rv = errmg!(sender.value.send(remote_request).await);
@@ -182,7 +222,7 @@ impl GatewayService {
 
 impl Service<Request<Incoming>> for GatewayService {
 	type Response = Response<GatewayBody>;
-	type Error = String;
+	type Error = hyper::http::Error;
 	type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
 	fn call(&self, req: Request<Incoming>) -> Self::Future {
@@ -192,9 +232,9 @@ impl Service<Request<Incoming>> for GatewayService {
 		let cfg_local = self.cfg.clone();
 
 		let (cfg,rules) = (*cfg_local.lock().unwrap_or_else(|mut e| {
-		    **e.get_mut() = self.original_cfg.clone();
-		    cfg_local.clear_poison();
-    		e.into_inner()
+			**e.get_mut() = self.original_cfg.clone();
+			cfg_local.clear_poison();
+			e.into_inner()
 		})).get_request_config(&method, &uri, &headers);
 
 		Box::pin(async move {
@@ -207,21 +247,20 @@ impl Service<Request<Incoming>> for GatewayService {
 				}
 			}
 
-			match Self::forward(&cfg, req, &corr_id).await {
-				Ok(remote_resp) => {
+			Self::forward(&cfg, req, &corr_id)
+				.await
+				.and_then(|remote_resp| {
 					if let Ok(mut locked) = cfg_local.lock() {
 						let status = remote_resp.status();
 						locked.notify_reply(rules, &status);
 					}
 					Self::mangle_reply(&cfg, remote_resp, &corr_id)
-				},
-				Err(e) => {
-					error!("Call forward failed: {:?}", e);
-					errmg!(Response::builder()
-						.status(502)
-						.body(GatewayBody::empty()))
-				}
-			}
+				}).or_else(|e| {
+					error!("Call forward failed: {:?}", e.message);
+					Response::builder()
+						.status(e.status)
+						.body(e.body)
+				})
 		})
 	}
 }
