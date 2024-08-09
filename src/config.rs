@@ -6,7 +6,7 @@ use std::time::Duration;
 use std::net::{ToSocketAddrs, SocketAddr};
 use hyper::{Method,Uri,header::HeaderMap,StatusCode};
 use regex::Regex;
-use log::{info,warn};
+use log::{LevelFilter,info,warn};
 
 #[derive(Clone)]
 pub struct RemoteConfig {
@@ -404,6 +404,7 @@ struct RawConfig {
 	graceful_shutdown_timeout: Option<String>,
 	ssl_mode: Option<String>,
 	cafile: Option<String>,
+	log_level: Option<String>,
 	log: Option<bool>,
 	log_headers: Option<bool>,
 	log_request_body: Option<bool>,
@@ -426,6 +427,7 @@ impl RawConfig {
 			graceful_shutdown_timeout: Self::env_str("GRACEFUL_SHUTDOWN_TIMEOUT"),
 			ssl_mode: Self::env_str("SSL_MODE"),
 			cafile: Self::env_str("CAFILE"),
+			log_level: None,
 			log: None,
 			log_headers: None,
 			log_request_body: None,
@@ -468,6 +470,7 @@ impl RawConfig {
 		self.graceful_shutdown_timeout = self.graceful_shutdown_timeout.take().or(other.graceful_shutdown_timeout);
 		self.ssl_mode = self.ssl_mode.take().or(other.ssl_mode);
 		self.cafile = self.cafile.take().or(other.cafile);
+		self.log_level = self.log_level.take().or(other.log_level);
 		self.log = self.log.take().or(other.log);
 		self.log_headers = self.log_headers.take().or(other.log_headers);
 		self.log_request_body = self.log_request_body.take().or(other.log_request_body);
@@ -583,7 +586,7 @@ pub struct Config {
 	graceful_shutdown_timeout: Duration,
 	server_ssl_trust: Option<PathBuf>,
 	server_ssl_key: Option<PathBuf>,
-
+	log_level: LevelFilter,
 	default_action: ConfigAction,
 	filters: HashMap<String,ConfigFilter>,
 	actions: HashMap<String,ConfigAction>,
@@ -618,6 +621,7 @@ impl Config {
 			graceful_shutdown_timeout: Self::parse_graceful_shutdown_timeout(&raw_cfg),
 			server_ssl_trust: Self::parse_file(&raw_cfg.server_ssl_trust),
 			server_ssl_key: Self::parse_file(&raw_cfg.server_ssl_key),
+			log_level: Self::parse_log_level(&raw_cfg.log_level),
 			filters: raw_cfg.get_filters(),
 			actions: raw_cfg.get_actions(),
 			rules: raw_cfg.get_rules(),
@@ -685,6 +689,10 @@ impl Config {
 		self.server_ssl_key.clone()
 	}
 
+	pub fn get_log_level(&self) -> LevelFilter {
+		self.log_level
+	}
+
 	fn parse_bind(rc: &RawConfig) -> SocketAddr {
 		if let Some(bind) = &rc.bind {
 			if let Ok(mut resolved) = bind.to_socket_addrs() {
@@ -724,6 +732,20 @@ impl Config {
 
 	fn parse_file(value: &Option<String>) -> Option<PathBuf> {
 		value.as_ref().and_then(|v| Some(Path::new(v).to_path_buf()))
+	}
+	fn parse_log_level(value: &Option<String>) -> LevelFilter {
+		let lev = value.as_ref()
+			.and_then(|v| Some(v.to_lowercase()))
+			.unwrap_or("".to_string());
+
+		match lev.trim() {
+			"trace" => LevelFilter::Trace,
+			"debug" => LevelFilter::Debug,
+			"info" => LevelFilter::Info,
+			"warn" => LevelFilter::Warn,
+			"error" => LevelFilter::Error,
+			_ => LevelFilter::Info,
+		}
 	}
 
 	fn parse_ssl_mode(rc: &RawConfig) -> SslMode {

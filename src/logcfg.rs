@@ -59,3 +59,7 @@ pub fn init_logging() {
 	log::set_max_level(LevelFilter::Info);
 }
 
+pub fn set_log_level(level: LevelFilter) {
+	log::set_max_level(level);
+}
+

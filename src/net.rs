@@ -7,7 +7,7 @@ use std::pin::Pin;
 use base64::prelude::*;
 use hyper::body::Incoming;
 use hyper::{Request, Response};
-use log::{info,warn};
+use log::{info,warn,trace};
 use tokio::io::{AsyncRead,AsyncWrite};
 use core::marker::Unpin;
 
@@ -207,7 +207,7 @@ impl LoggingStream {
 					cline.push_str(" ");
 				}
 			}
-			println!("{} {}{}", dirst, bline, cline);
+			trace!("{} {}{}", dirst, bline, cline);
 		}
 	}
 }

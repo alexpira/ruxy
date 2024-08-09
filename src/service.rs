@@ -10,7 +10,7 @@ use std::error::Error;
 use std::fmt;
 use std::fmt::Debug;
 use hyper_util::rt::tokio::TokioIo;
-use log::{debug,info,warn,error};
+use log::{debug,info,warn,error,log_enabled,Level};
 use std::time::Duration;
 
 use crate::pool::{remote_pool_key,remote_pool_get,remote_pool_release};
@@ -92,11 +92,19 @@ impl GatewayService {
 
 		if remote.ssl() {
 			let stream = crate::ssl::wrap_client( stream, ssldata, remote ).await?;
-			let stream = crate::net::LoggingStream::wrap(stream);
-			Ok(Box::new(stream))
+			if log_enabled!(Level::Trace) {
+				let stream = crate::net::LoggingStream::wrap(stream);
+				Ok(Box::new(stream))
+			} else {
+				Ok(Box::new(stream))
+			}
 		} else {
-			let stream = crate::net::LoggingStream::wrap(stream);
-			Ok(Box::new(stream))
+			if log_enabled!(Level::Trace) {
+				let stream = crate::net::LoggingStream::wrap(stream);
+				Ok(Box::new(stream))
+			} else {
+				Ok(Box::new(stream))
+			}
 		}
 	}
 

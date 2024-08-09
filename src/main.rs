@@ -47,28 +47,33 @@ fn load_file(file: &str) -> Result<Option<String>, Box<dyn std::error::Error + S
 	}
 }
 
+enum ConfigSource { File, Env }
+
 #[tokio::main]
 pub async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 	logcfg::init_logging();
-	let args: Vec<String> = std::env::args().collect();
 
-	let default_cfile = "config.toml";
-	let config = if args.len() > 2 {
+	let mut cfgsrc = ConfigSource::File;
+	let mut cfgfrom = "config.toml";
+
+	let args: Vec<String> = std::env::args().collect();
+	if args.len() > 2 {
 		if args[1].eq("-f") {
-			let cfile = &args[2];
-			info!("Looking for configuration file {}", cfile);
-			load_file(cfile)?
+			cfgfrom = &args[2];
 		} else if args[1].eq("-e") {
-			let cenv = &args[2];
-			info!("Looking for configuration in environment {}", cenv);
-			load_env(cenv)
-		} else {
-			info!("Looking for configuration file {}", default_cfile);
-			load_file(default_cfile)?
+			cfgsrc = ConfigSource::Env;
+			cfgfrom = &args[2];
 		}
-	} else {
-		info!("Looking for configuration file {}", default_cfile);
-		load_file(default_cfile)?
+	}
+	let config = match cfgsrc {
+		ConfigSource::File => {
+			info!("Looking for configuration file {}", cfgfrom);
+			load_file(cfgfrom)?
+		},
+		ConfigSource::Env => {
+			info!("Looking for configuration in environment {}", cfgfrom);
+			load_env(cfgfrom)
+		},
 	}.unwrap_or("".to_string());
 
 	let cfg = match config::Config::load(&config) {
@@ -76,6 +81,7 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 		Err(e) => panic!("{}", e)
 	};
 
+	logcfg::set_log_level(cfg.get_log_level());
 	let addr = cfg.get_bind();
 
 	let svc = GatewayService::new(cfg.clone());
