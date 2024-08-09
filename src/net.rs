@@ -214,19 +214,19 @@ impl LoggingStream {
 impl AsyncRead for LoggingStream {
 	fn poll_read(mut self: Pin<&mut Self>, ctx: &mut std::task::Context<'_>, buf: &mut tokio::io::ReadBuf<'_>) -> Poll<Result<(), std::io::Error>> {
 		let pos = buf.filled().len();
-        let result = Pin::new(&mut self.wrapped).poll_read(ctx, buf);
-        if buf.filled().len() > pos {
-            let data = &buf.filled()[pos..];
-            Self::dump(data, Direction::In);
-        }
-        result
+		let result = Pin::new(&mut self.wrapped).poll_read(ctx, buf);
+		if buf.filled().len() > pos {
+			let data = &buf.filled()[pos..];
+			Self::dump(data, Direction::In);
+		}
+		result
 	}
 }
 impl AsyncWrite for LoggingStream {
-    fn poll_write(mut self: Pin<&mut Self>, ctx: &mut std::task::Context<'_>, data: &[u8]) -> std::task::Poll<std::io::Result<usize>> {
-        Self::dump(data, Direction::Out);
-        Pin::new(&mut self.wrapped).poll_write(ctx, data)
-    }
+	fn poll_write(mut self: Pin<&mut Self>, ctx: &mut std::task::Context<'_>, data: &[u8]) -> std::task::Poll<std::io::Result<usize>> {
+		Self::dump(data, Direction::Out);
+		Pin::new(&mut self.wrapped).poll_write(ctx, data)
+	}
 	fn poll_flush(mut self: Pin<&mut Self>, ctx: &mut std::task::Context<'_>) -> Poll<Result<(), std::io::Error>> {
 		Pin::new(&mut self.wrapped).poll_flush(ctx)
 	}

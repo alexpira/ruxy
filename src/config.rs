@@ -554,14 +554,14 @@ impl<T> From<T> for SslMode where T: Into<String> {
 }
 
 impl std::fmt::Display for SslMode {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+	fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
 			SslMode::Builtin => formatter.write_str("Builtin"),
 			SslMode::OS => formatter.write_str("OS"),
 			SslMode::File => formatter.write_str("File"),
 			SslMode::Dangerous => formatter.write_str("Dangerous"),
 		}
-    }
+	}
 }
 
 #[derive(Clone,Copy)]
@@ -569,13 +569,13 @@ impl std::fmt::Display for SslMode {
 pub enum HttpVersionMode { V1, V2Direct, V2Handshake }
 
 impl std::fmt::Display for HttpVersionMode {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+	fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
 			HttpVersionMode::V1 => formatter.write_str("V1"),
 			HttpVersionMode::V2Direct => formatter.write_str("V2Direct"),
 			HttpVersionMode::V2Handshake => formatter.write_str("V2Handshake"),
 		}
-    }
+	}
 }
 
 pub type SslData = (SslMode, HttpVersionMode, Option<PathBuf>);
