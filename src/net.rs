@@ -175,3 +175,65 @@ macro_rules! config_socket {
 }
 pub(crate) use config_socket;
 
+enum Direction { In, Out }
+
+pub struct LoggingStream {
+	wrapped: Box<dyn Stream + Send>
+}
+impl LoggingStream {
+	pub fn wrap(t: impl Stream + 'static) -> Self {
+		Self { wrapped: Box::new(t) }
+	}
+	fn dump(data: &[u8], dir: Direction) {
+		let dirst = match dir {
+			Direction::In => "<-",
+			Direction::Out => "->"
+		};
+		for idx in (0..data.len()).step_by(16) {
+			let mut bline = String::with_capacity(48);
+			let mut cline = String::with_capacity(16);
+			for inidx in 0..16 {
+				let totidx = idx+inidx;
+				if totidx < data.len() {
+					let ch = data[totidx];
+					bline.push_str(format!("{:02x} ", ch).as_str());
+					if ch.is_ascii_graphic() {
+						cline.push_str(std::str::from_utf8(&[ch]).unwrap_or("."));
+					} else {
+						cline.push_str(".");
+					}
+				} else {
+					bline.push_str("   ");
+					cline.push_str(" ");
+				}
+			}
+			println!("{} {}{}", dirst, bline, cline);
+		}
+	}
+}
+impl AsyncRead for LoggingStream {
+	fn poll_read(mut self: Pin<&mut Self>, ctx: &mut std::task::Context<'_>, buf: &mut tokio::io::ReadBuf<'_>) -> Poll<Result<(), std::io::Error>> {
+		let pos = buf.filled().len();
+        let result = Pin::new(&mut self.wrapped).poll_read(ctx, buf);
+        if buf.filled().len() > pos {
+            let data = &buf.filled()[pos..];
+            Self::dump(data, Direction::In);
+        }
+        result
+	}
+}
+impl AsyncWrite for LoggingStream {
+    fn poll_write(mut self: Pin<&mut Self>, ctx: &mut std::task::Context<'_>, data: &[u8]) -> std::task::Poll<std::io::Result<usize>> {
+        Self::dump(data, Direction::Out);
+        Pin::new(&mut self.wrapped).poll_write(ctx, data)
+    }
+	fn poll_flush(mut self: Pin<&mut Self>, ctx: &mut std::task::Context<'_>) -> Poll<Result<(), std::io::Error>> {
+		Pin::new(&mut self.wrapped).poll_flush(ctx)
+	}
+	fn poll_shutdown(mut self: Pin<&mut Self>, ctx: &mut std::task::Context<'_>) -> Poll<Result<(), std::io::Error>> {
+		Pin::new(&mut self.wrapped).poll_shutdown(ctx)
+	}
+}
+impl Unpin for LoggingStream { }
+
+

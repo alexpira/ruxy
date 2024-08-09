@@ -12,6 +12,7 @@ use rustls::{Error,SignatureScheme,DigitallySignedStruct};
 use rustls::client::danger::{ServerCertVerifier,ServerCertVerified,HandshakeSignatureValid};
 
 use crate::config::{Config,RemoteConfig,SslMode,HttpVersionMode,SslData};
+use crate::net::Stream;
 
 #[derive(Debug)]
 struct SslCertValidationDisabler { }
@@ -156,7 +157,7 @@ fn build_client_ssl_config(cfg: SslData) -> rustls::ClientConfig {
 	config
 }
 
-pub async fn wrap_client(stream: TcpStream, cfg: SslData, remote: &RemoteConfig) -> Result<tokio_rustls::client::TlsStream<TcpStream>,String> {
+pub async fn wrap_client<T>(stream: T, cfg: SslData, remote: &RemoteConfig) -> Result<tokio_rustls::client::TlsStream<T>,String> where T: Stream {
 	let config = build_client_ssl_config(cfg);
 	let connector = TlsConnector::from(Arc::new(config));
 

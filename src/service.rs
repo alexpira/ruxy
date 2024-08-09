@@ -87,14 +87,15 @@ impl GatewayService {
 	}
 
 	async fn connect(address: (String,u16), ssldata: SslData, remote: &RemoteConfig) -> Result<Box<dyn Stream>, ServiceError> {
+		let stream = errmg!(TcpStream::connect(address).await)?;
+		config_socket!(stream);
+
 		if remote.ssl() {
-			let stream = errmg!(TcpStream::connect(address).await)?;
-			config_socket!(stream);
 			let stream = crate::ssl::wrap_client( stream, ssldata, remote ).await?;
+			let stream = crate::net::LoggingStream::wrap(stream);
 			Ok(Box::new(stream))
 		} else {
-			let stream = errmg!(TcpStream::connect(address).await)?;
-			config_socket!(stream);
+			let stream = crate::net::LoggingStream::wrap(stream);
 			Ok(Box::new(stream))
 		}
 	}
