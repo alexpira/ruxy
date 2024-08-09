@@ -21,6 +21,7 @@ pub struct ServiceError {
 	message: String,
 	status: StatusCode,
 	body: GatewayBody,
+	source: Option<Box<dyn Error>>,
 }
 
 impl fmt::Display for ServiceError {
@@ -37,7 +38,10 @@ impl Debug for ServiceError {
 
 impl Error for ServiceError {
 	fn source(&self) -> Option<&(dyn Error + 'static)> {
-		None
+		match &self.source {
+			None => None,
+			Some(bxe) => Some(bxe.as_ref()),
+		}
 	}
 }
 
@@ -47,6 +51,7 @@ impl From<String> for ServiceError {
 			message: message,
 			status: StatusCode::BAD_GATEWAY,
 			body: GatewayBody::empty(),
+			source: None,
 		}
 	}
 }
@@ -57,6 +62,7 @@ macro_rules! errmg {
 			message: format!("{:?} at {}:{}", e, file!(), line!()),
 			status: StatusCode::BAD_GATEWAY,
 			body: GatewayBody::empty(),
+			source: Some(Box::new(e)),
 		})
 	}
 }
