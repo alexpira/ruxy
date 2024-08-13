@@ -8,6 +8,8 @@ use hyper::{Method,Uri,header::HeaderMap,StatusCode};
 use regex::Regex;
 use log::{LevelFilter,info,warn};
 
+use crate::c3po::HttpVersion;
+
 #[derive(Clone)]
 pub struct RemoteConfig {
 	address: (String, u16),
@@ -175,6 +177,7 @@ impl ConfigFilter {
 pub struct ConfigAction {
 	remote: Option<RemoteConfig>,
 	rewrite_host: Option<bool>,
+	http_client_version: Option<HttpVersion>,
 	log: Option<bool>,
 	log_headers: Option<bool>,
 	log_request_body: Option<bool>,
@@ -191,6 +194,7 @@ impl ConfigAction {
 			toml::Value::Table(t) => Some(ConfigAction {
 				remote: t.get("remote").and_then(|v| v.as_str()).and_then(|v| Some(RemoteConfig::build(v))),
 				rewrite_host: t.get("rewrite_host").and_then(|v| v.as_bool()),
+				http_client_version: t.get("http_client_version").and_then(|v| v.as_str()).and_then(|v| HttpVersion::parse(v)),
 				log: t.get("log").and_then(|v| v.as_bool()),
 				log_headers: t.get("log_headers").and_then(|v| v.as_bool()),
 				log_request_body: t.get("log_request_body").and_then(|v| v.as_bool()),
@@ -207,6 +211,7 @@ impl ConfigAction {
 	fn merge(&mut self, other: &ConfigAction) {
 		self.remote = self.remote.take().or(other.remote.clone());
 		self.rewrite_host = self.rewrite_host.take().or(other.rewrite_host);
+		self.http_client_version = self.http_client_version.take().or(other.http_client_version);
 		self.log = self.log.take().or(other.log);
 		self.log_headers = self.log_headers.take().or(other.log_headers);
 		self.log_request_body = self.log_request_body.take().or(other.log_request_body);
@@ -263,8 +268,8 @@ impl ConfigAction {
 		self.max_reply_log_size.unwrap_or(256 * 1024)
 	}
 
-	pub fn client_version(&self) -> HttpVersionMode {
-		HttpVersionMode::V1 // TODO
+	pub fn client_version(&self) -> HttpVersion {
+		self.http_client_version.unwrap_or(HttpVersion::H1)
 	}
 }
 
@@ -401,6 +406,8 @@ struct RawConfig {
 	remote: Option<String>,
 	bind: Option<String>,
 	rewrite_host: Option<bool>,
+	http_server_version: Option<String>,
+	http_client_version: Option<String>,
 	graceful_shutdown_timeout: Option<String>,
 	ssl_mode: Option<String>,
 	cafile: Option<String>,
@@ -427,6 +434,8 @@ impl RawConfig {
 			graceful_shutdown_timeout: Self::env_str("GRACEFUL_SHUTDOWN_TIMEOUT"),
 			ssl_mode: Self::env_str("SSL_MODE"),
 			cafile: Self::env_str("CAFILE"),
+			http_server_version: None,
+			http_client_version: None,
 			log_level: None,
 			log: None,
 			log_headers: None,
@@ -467,6 +476,8 @@ impl RawConfig {
 		self.remote = self.remote.take().or(other.remote);
 		self.bind = self.bind.take().or(other.bind);
 		self.rewrite_host = self.rewrite_host.take().or(other.rewrite_host);
+		self.http_server_version = self.http_server_version.take().or(other.http_server_version);
+		self.http_client_version = self.http_client_version.take().or(other.http_client_version);
 		self.graceful_shutdown_timeout = self.graceful_shutdown_timeout.take().or(other.graceful_shutdown_timeout);
 		self.ssl_mode = self.ssl_mode.take().or(other.ssl_mode);
 		self.cafile = self.cafile.take().or(other.cafile);
@@ -564,25 +575,12 @@ impl std::fmt::Display for SslMode {
 	}
 }
 
-#[derive(Clone,Copy)]
-#[allow(dead_code)] // TODO: http2 support is still work-in-progress
-pub enum HttpVersionMode { V1, V2Direct, V2Handshake }
-
-impl std::fmt::Display for HttpVersionMode {
-	fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		match self {
-			HttpVersionMode::V1 => formatter.write_str("V1"),
-			HttpVersionMode::V2Direct => formatter.write_str("V2Direct"),
-			HttpVersionMode::V2Handshake => formatter.write_str("V2Handshake"),
-		}
-	}
-}
-
-pub type SslData = (SslMode, HttpVersionMode, Option<PathBuf>);
+pub type SslData = (SslMode, HttpVersion, Option<PathBuf>);
 
 #[derive(Clone)]
 pub struct Config {
 	bind: SocketAddr,
+	http_server_version: HttpVersion,
 	graceful_shutdown_timeout: Duration,
 	server_ssl_trust: Option<PathBuf>,
 	server_ssl_key: Option<PathBuf>,
@@ -609,6 +607,7 @@ impl Config {
 				remote: Some(RemoteConfig::build(remote)),
 				rewrite_host: raw_cfg.rewrite_host,
 				ssl_mode: Some(Self::parse_ssl_mode(&raw_cfg)),
+				http_client_version: Self::parse_http_version(&raw_cfg.http_client_version),
 				cafile: Self::parse_file(&raw_cfg.cafile),
 				log: raw_cfg.log,
 				log_headers: raw_cfg.log_headers,
@@ -619,6 +618,7 @@ impl Config {
 			},
 			bind: Self::parse_bind(&raw_cfg),
 			graceful_shutdown_timeout: Self::parse_graceful_shutdown_timeout(&raw_cfg),
+			http_server_version: Self::parse_http_version(&raw_cfg.http_server_version).unwrap_or(HttpVersion::H1),
 			server_ssl_trust: Self::parse_file(&raw_cfg.server_ssl_trust),
 			server_ssl_key: Self::parse_file(&raw_cfg.server_ssl_key),
 			log_level: Self::parse_log_level(&raw_cfg.log_level),
@@ -673,8 +673,8 @@ impl Config {
 		self.bind
 	}
 
-	pub fn server_version(&self) -> HttpVersionMode {
-		HttpVersionMode::V1 // TODO
+	pub fn server_version(&self) -> HttpVersion {
+		self.http_server_version
 	}
 
 	pub fn server_ssl(&self) -> bool {
@@ -728,6 +728,10 @@ impl Config {
 			}
 		}
 		Duration::from_secs(10)
+	}
+
+	fn parse_http_version(value: &Option<String>) -> Option<HttpVersion> {
+		value.as_ref().and_then(|v| HttpVersion::parse(v))
 	}
 
 	fn parse_file(value: &Option<String>) -> Option<PathBuf> {

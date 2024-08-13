@@ -1,40 +1,29 @@
-use chrono::{Local, Utc};
+
 use log::{Level, LevelFilter, Metadata, Record};
-use serde_json::json;
 
-struct SimpleLogger;
+struct Logger;
 
-impl log::Log for SimpleLogger {
+impl log::Log for Logger {
 	fn enabled(&self, metadata: &Metadata) -> bool {
 		// let target = metadata.target();
 		let lev = Level::Debug;
 		metadata.level() <= lev
 	}
 
+	#[cfg(debug_assertions)]
 	fn log(&self, record: &Record) {
 		println!(
 			"{} {:<5} {}",
-			Local::now().format("%Y-%m-%d %H:%M:%S"),
+			chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
 			record.level(),
 			record.args()
 		);
 	}
 
-	fn flush(&self) {}
-}
-
-struct JsonLogger;
-
-impl log::Log for JsonLogger {
-	fn enabled(&self, metadata: &Metadata) -> bool {
-		// let target = metadata.target();
-		let lev = Level::Info;
-		metadata.level() <= lev
-	}
-
+	#[cfg(not(debug_assertions))]
 	fn log(&self, record: &Record) {
-		let json = json!({
-			"@timestamp": format!("{}", Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ")),
+		let json = serde_json::json!({
+			"@timestamp": format!("{}", chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ")),
 			"ecs.version": "8.5",
 			"log.level": format!("{}", record.level()),
 			"log.logger": record.target(),
@@ -46,10 +35,7 @@ impl log::Log for JsonLogger {
 	fn flush(&self) {}
 }
 
-#[cfg(debug_assertions)]
-static LOGGER: SimpleLogger = SimpleLogger;
-#[cfg(not(debug_assertions))]
-static LOGGER: JsonLogger = JsonLogger;
+static LOGGER: Logger = Logger;
 
 pub fn init_logging() {
 	log::set_logger(&LOGGER).unwrap();

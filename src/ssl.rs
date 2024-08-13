@@ -11,7 +11,7 @@ use log::{warn,error};
 use rustls::{Error,SignatureScheme,DigitallySignedStruct};
 use rustls::client::danger::{ServerCertVerifier,ServerCertVerified,HandshakeSignatureValid};
 
-use crate::config::{Config,RemoteConfig,SslMode,HttpVersionMode,SslData};
+use crate::config::{Config,RemoteConfig,SslMode,SslData};
 use crate::net::Stream;
 
 #[derive(Debug)]
@@ -149,11 +149,7 @@ fn build_client_ssl_config(cfg: SslData) -> rustls::ClientConfig {
 		},
 	};
 
-	config.alpn_protocols = match cfg.1 {
-		HttpVersionMode::V1 => vec![b"http/1.1".to_vec(), b"http/1.0".to_vec()],
-		HttpVersionMode::V2Direct => vec![b"h2".to_vec()],
-		HttpVersionMode::V2Handshake => vec![b"http/1.1".to_vec(), b"http/1.0".to_vec()],
-	};
+	config.alpn_protocols = cfg.1.alpn_request();
 	config
 }
 
@@ -191,11 +187,7 @@ pub fn get_ssl_acceptor(cfg: Config) -> Result<TlsAcceptor,String> {
 		Err(e) => return Err(format!("{}:{} Invalid configuration: {:?}", file!(), line!(), e))
 	};
 
-	config.alpn_protocols = match cfg.server_version() {
-		HttpVersionMode::V1 => vec![b"http/1.1".to_vec(), b"http/1.0".to_vec()],
-		HttpVersionMode::V2Direct => vec![b"h2".to_vec()],
-		HttpVersionMode::V2Handshake => vec![b"http/1.1".to_vec(), b"http/1.0".to_vec()],
-	};
+	config.alpn_protocols = cfg.server_version().alpn_request();
 
 	Ok(TlsAcceptor::from(Arc::new(config)))
 }

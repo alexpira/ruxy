@@ -14,14 +14,25 @@ use log::{debug,info,warn,error,log_enabled,Level};
 use std::time::Duration;
 
 use crate::pool::{remote_pool_key,remote_pool_get,remote_pool_release};
-use crate::net::{Stream,Sender,GatewayBody,keepalive,config_socket};
-use crate::config::{Config,RemoteConfig,ConfigAction,HttpVersionMode,SslData};
+use crate::net::{Stream,Sender,GatewayBody,config_socket};
+use crate::config::{Config,RemoteConfig,ConfigAction,SslData};
 
 pub struct ServiceError {
 	message: String,
 	status: StatusCode,
 	body: GatewayBody,
 	source: Option<Box<dyn Error>>,
+}
+
+impl ServiceError {
+	pub fn remap<T>(message: String, status: StatusCode, e: T) -> Self where T: Error + 'static {
+		Self {
+			message: message,
+			status: status,
+			body: GatewayBody::empty(),
+			source: Some(Box::new(e)),
+		}
+	}
 }
 
 impl fmt::Display for ServiceError {
@@ -58,14 +69,13 @@ impl From<String> for ServiceError {
 
 macro_rules! errmg {
 	($arg: expr) => {
-		($arg).map_err(|e| ServiceError {
-			message: format!("{:?} at {}:{}", e, file!(), line!()),
-			status: StatusCode::BAD_GATEWAY,
-			body: GatewayBody::empty(),
-			source: Some(Box::new(e)),
-		})
+		($arg).map_err(|e| ServiceError::remap(
+			format!("{:?} at {}:{}", e, file!(), line!()),
+			StatusCode::BAD_GATEWAY, e
+		))
 	}
 }
+pub(crate) use errmg;
 
 struct CachedSender {
 	key: String,
@@ -108,31 +118,19 @@ impl GatewayService {
 		}
 	}
 
-	async fn handshake(io: TokioIo<Box<dyn Stream>>, httpver: HttpVersionMode) -> Result<Box<dyn Sender>, ServiceError> {
-		match httpver {
-			HttpVersionMode::V1 => {
-				let (sender, conn) = errmg!(hyper::client::conn::http1::handshake(io).await)?;
-				keepalive!(conn);
-				Ok(Box::new(sender))
-			},
-			HttpVersionMode::V2Direct => {
-				let executor = hyper_util::rt::tokio::TokioExecutor::new();
-				let (sender, conn) = errmg!(hyper::client::conn::http2::handshake(executor, io).await)?;
-				keepalive!(conn);
-				Ok(Box::new(sender))
-			},
-			HttpVersionMode::V2Handshake => {
-				let executor = hyper_util::rt::tokio::TokioExecutor::new();
-				let (sender, conn) = errmg!(hyper::client::conn::http2::handshake(executor, io).await)?;
-				// TODO: h2 handshake
-
-				keepalive!(conn);
-				Ok(Box::new(sender))
-			},
-		}
-	}
-
 	fn mangle_request(cfg: &ConfigAction, req: Request<Incoming>, corr_id: &str) -> Result<Request<GatewayBody>, ServiceError> {
+		if cfg.log() {
+			let uri = req.uri().clone();
+			info!("{}REQUEST {:?} {} {} {}", corr_id, req.version(), req.method(), uri.path(), uri.query().unwrap_or("-"));
+		}
+
+		if cfg.log_headers() {
+			let hdrs = req.headers();
+			for (key, value) in hdrs.iter() {
+				info!("{} -> {:?}: {:?}", corr_id, key, value);
+			}
+		}
+
 		let req = req.map(|v| {
 			let mut body = GatewayBody::wrap(v);
 			if cfg.log_request_body() {
@@ -141,39 +139,8 @@ impl GatewayService {
 			body
 		});
 
-		if cfg.log() {
-			let uri = req.uri().clone();
-			info!("{}REQUEST {:?} {} {} {}", corr_id, req.version(), req.method(), uri.path(), uri.query().unwrap_or("-"));
-		}
-
-		let hdrs = req.headers();
-
-		let mut modified_request = Request::builder()
-			.method(req.method())
-			.uri(req.uri());
-
-		let mut host_done = false;
-		let loghdr = cfg.log_headers();
-		for (key, value) in hdrs.iter() {
-			if loghdr {
-				info!("{} -> {:?}: {:?}", corr_id, key, value);
-			}
-			if key == "host" {
-				if let Some(repl) = cfg.get_rewrite_host() {
-					modified_request = modified_request.header(key, repl);
-					host_done = true;
-					continue;
-				}
-			}
-			modified_request = modified_request.header(key, value);
-		}
-		if !host_done {
-			if let Some(repl) = cfg.get_rewrite_host() {
-				modified_request = modified_request.header("host", repl);
-			}
-		}
-
-		errmg!(modified_request.body(req.into_body()))
+		let modified_request = cfg.client_version().adapt(cfg, req)?;
+		Ok(modified_request)
 	}
 
 	fn mangle_reply(cfg: &ConfigAction, remote_resp: Response<Incoming>, corr_id: &str) -> Result<Response<GatewayBody>, ServiceError> {
@@ -216,7 +183,7 @@ impl GatewayService {
 		} else {
 			let stream = Self::connect(address, ssldata, &remote).await?;
 			let io = TokioIo::new( stream );
-			Self::handshake(io, httpver).await?
+			httpver.handshake(io).await?
 		};
 
 		Ok(CachedSender {

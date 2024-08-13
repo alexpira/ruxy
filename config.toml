@@ -3,6 +3,7 @@
 bind = "localhost:8080"
 remote = "http://localhost:8000/"
 rewrite_host = false
+http_version = "h1"
 
 # ssl_mode = "os"
 
@@ -29,7 +30,7 @@ root = { path = "^/$" }
 no_log = { log = false, log_headers = false, log_request_body = false }
 log_hdr = { log_headers = true }
 log_body = { log_request_body = true }
-to_google = { remote = "https://www.google.it", rewrite_host = true }
+to_google = { remote = "https://www.google.it", rewrite_host = true, http_client_version = "h2" }
 log_reply = { log_reply_body = true }
 
 [rules]

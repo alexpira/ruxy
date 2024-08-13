@@ -11,6 +11,7 @@ use service::GatewayService;
 
 mod pool;
 mod random;
+mod c3po;
 mod config;
 mod ssl;
 mod logcfg;
