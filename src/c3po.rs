@@ -1,8 +1,9 @@
 
 use hyper_util::rt::tokio::TokioIo;
 use log::warn;
-use hyper::{Request,StatusCode,Version,Uri};
-use http::uri::Authority;
+use hyper::{Request,Method,StatusCode,Version,Uri};
+use http::uri::{Scheme,Authority};
+use std::str::FromStr;
 
 use crate::net::{Stream,Sender,keepalive,GatewayBody};
 use crate::service::{errmg,ServiceError};
@@ -104,27 +105,30 @@ impl HttpVersion {
 					continue;
 				}
 				if self.h2() {
-					modified_request = modified_request.header(":authority", value);
 					if let Ok(astr) = value.to_str() {
-//						urip.authority = Some(Authority::from(astr));
+						if let Ok(auth) = Authority::from_str(astr) {
+							urip.authority = Some(auth);
+						}
 					}
 					continue;
 				}
-			}
-			if key == ":method" && self.h1() {
-//				modified_request.method(value);
-				continue;
 			}
 
 			modified_request = modified_request.header(key, value);
 		}
 		if let Some(repl) = cfg.get_rewrite_host() {
-			modified_request = modified_request.header(
-				if self.h1() { "host" } else { ":authority" },
-				repl);
-			if self.h2() {
-//				urip.authority = Authority::from_str(repl);
+			if self.h1() {
+				modified_request = modified_request.header("host", repl.clone());
 			}
+			if self.h2() {
+				if let Ok(auth) = Authority::from_str(repl.as_str()) {
+					urip.authority = Some(auth);
+				}
+			}
+		}
+
+		if self.h2() {
+			urip.scheme = Some(Scheme::from_str("https").unwrap()); // TODO
 		}
 
 		modified_request = modified_request.uri(Uri::from_parts(urip).unwrap());
