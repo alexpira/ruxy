@@ -1,15 +1,15 @@
 
 use hyper_util::rt::tokio::TokioIo;
 use log::warn;
-use hyper::{Request,StatusCode};
+use hyper::{Request,StatusCode,Version,Uri};
+use http::uri::Authority;
 
 use crate::net::{Stream,Sender,keepalive,GatewayBody};
 use crate::service::{errmg,ServiceError};
 use crate::config::ConfigAction;
 
-#[derive(Clone,Copy)]
-#[allow(dead_code)] // TODO: http2/3 support is still work-in-progress
-pub enum HttpVersion { H1, H2, H2C /*, H3*/ }
+#[derive(Clone,Copy,PartialEq)]
+pub enum HttpVersion { H1, H2, H2C /*, TODO: H3*/ }
 
 impl HttpVersion {
 	pub fn parse(st: &str) -> Option<Self> {
@@ -53,28 +53,81 @@ impl HttpVersion {
 		}
 	}
 
+	fn h1(&self) -> bool {
+		*self == HttpVersion::H1
+	}
+	fn h2(&self) -> bool {
+		*self == HttpVersion::H2 || *self == HttpVersion::H2C
+	}
+
+	fn matches(&self, ver: Version) -> bool {
+		match self {
+			HttpVersion::H1 => {
+				ver == Version::HTTP_09 ||
+				ver == Version::HTTP_10 ||
+				ver == Version::HTTP_11
+			},
+			HttpVersion::H2 => ver == Version::HTTP_2,
+			HttpVersion::H2C => ver == Version::HTTP_2,
+		}
+	}
+
+	fn to_version(&self) -> Version {
+		match self {
+			HttpVersion::H1 => Version::HTTP_11,
+			HttpVersion::H2 => Version::HTTP_2,
+			HttpVersion::H2C => Version::HTTP_2,
+		}
+	}
+
 	pub fn adapt(&self, cfg: &ConfigAction, req: Request<GatewayBody>) -> Result<Request<GatewayBody>, ServiceError> {
+		let src_ver = req.version();
+		let need_tr = !self.matches(src_ver);
+		let rewrite_host = cfg.get_rewrite_host();
+
+		let mut urip = req.uri().clone().into_parts();
+
+		let tgt_ver = if need_tr {
+			src_ver
+		} else {
+			self.to_version()
+		};
 		let hdrs = req.headers();
+
 		let mut modified_request = Request::builder()
 			.method(req.method())
-			.uri(req.uri());
+			.version(tgt_ver);
 
-		let mut host_done = false;
 		for (key, value) in hdrs.iter() {
 			if key == "host" {
-				if let Some(repl) = cfg.get_rewrite_host() {
-					modified_request = modified_request.header(key, repl);
-					host_done = true;
+				if rewrite_host.is_some() {
+					continue;
+				}
+				if self.h2() {
+					modified_request = modified_request.header(":authority", value);
+					if let Ok(astr) = value.to_str() {
+//						urip.authority = Some(Authority::from(astr));
+					}
 					continue;
 				}
 			}
+			if key == ":method" && self.h1() {
+//				modified_request.method(value);
+				continue;
+			}
+
 			modified_request = modified_request.header(key, value);
 		}
-		if !host_done {
-			if let Some(repl) = cfg.get_rewrite_host() {
-				modified_request = modified_request.header("host", repl);
+		if let Some(repl) = cfg.get_rewrite_host() {
+			modified_request = modified_request.header(
+				if self.h1() { "host" } else { ":authority" },
+				repl);
+			if self.h2() {
+//				urip.authority = Authority::from_str(repl);
 			}
 		}
+
+		modified_request = modified_request.uri(Uri::from_parts(urip).unwrap());
 
 		errmg!(modified_request.body(req.into_body()))
 	}
