@@ -1,9 +1,10 @@
 
 use hyper_util::rt::tokio::TokioIo;
-use log::warn;
 use hyper::{Request,Response,StatusCode,Version,Uri};
+use hyper::upgrade::Upgraded;
 use http::uri::{Scheme,Authority};
 use std::str::FromStr;
+use log::warn;
 
 use crate::net::{Stream,Sender,keepalive,GatewayBody};
 use crate::service::{errmg,ServiceError};
@@ -30,7 +31,23 @@ impl HttpVersion {
 		}
 	}
 
-	pub async fn handshake(&self, io: TokioIo<Box<dyn Stream>>) -> Result<Box<dyn Sender>, ServiceError> {
+    async fn upgrade_1to2(target: String, mut sender: hyper::client::conn::http1::SendRequest<GatewayBody>) -> Result<Upgraded, ServiceError> {
+        let req = errmg!(Request::builder()
+            .uri(target)
+            .header(hyper::header::CONNECTION, "upgrade")
+            .header(hyper::header::UPGRADE, "HTTP/2.0")
+            .body(GatewayBody::empty()))?;
+
+        let res = errmg!(sender.send_request(req).await)?;
+
+        if res.status() != StatusCode::SWITCHING_PROTOCOLS {
+            Err(format!("h2c upgrade failed, status: {}", res.status()).into())
+        } else {
+            errmg!(hyper::upgrade::on(res).await)
+        }
+    }
+
+	pub async fn handshake(&self, target: String, io: TokioIo<Box<dyn Stream>>) -> Result<Box<dyn Sender>, ServiceError> {
 		match self {
 			HttpVersion::H1 => {
 				let (sender, conn) = errmg!(hyper::client::conn::http1::handshake(io).await)?;
@@ -44,12 +61,15 @@ impl HttpVersion {
 				Ok(Box::new(sender))
 			},
 			HttpVersion::H2C => {
-				let executor = hyper_util::rt::tokio::TokioExecutor::new();
-				let (sender, conn) = errmg!(hyper::client::conn::http2::handshake(executor, io).await)?;
-				// TODO: h2 handshake
+				let (sender, conn) = errmg!(hyper::client::conn::http1::handshake(io).await)?;
+				keepalive!(conn.with_upgrades());
 
-				keepalive!(conn);
-				Ok(Box::new(sender))
+                let upgraded = Self::upgrade_1to2(target, sender).await?;
+
+				let executor = hyper_util::rt::tokio::TokioExecutor::new();
+				let (upgsender, _conn) = errmg!(hyper::client::conn::http2::handshake(executor, upgraded).await)?;
+
+				Ok(Box::new(upgsender))
 			},
 		}
 	}

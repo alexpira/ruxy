@@ -203,7 +203,7 @@ impl GatewayService {
 		} else {
 			let stream = Self::connect(address, ssldata, &remote).await?;
 			let io = TokioIo::new( stream );
-			httpver.handshake(io).await?
+			httpver.handshake(remote.raw(), io).await?
 		};
 
 		Ok(CachedSender {
