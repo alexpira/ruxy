@@ -162,7 +162,7 @@ impl GatewayService {
 			body
 		});
 		Self::log_request(action, &req, corr_id, "->R");
-		let modified_request = action.client_version().adapt_request(cfg, action, req)?;
+		let modified_request = action.client_version().adapt_request(cfg, action, req, corr_id)?;
 		Self::log_request(action, &modified_request, corr_id, "R->");
 		Ok(modified_request)
 	}

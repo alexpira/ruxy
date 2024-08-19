@@ -2,11 +2,11 @@
 use hyper_util::rt::tokio::{TokioIo, TokioTimer};
 use hyper_util::server::graceful::GracefulShutdown;
 use hyper::{Request,Response,StatusCode,Version,Uri};
-use hyper::server::conn::http1;
+use hyper::server::conn::{http1,http2};
 use hyper::upgrade::Upgraded;
 use http::uri::{Scheme,Authority};
 use std::str::FromStr;
-use log::{debug,warn};
+use log::{debug,warn,error};
 
 use crate::net::{Stream,Sender,keepalive,GatewayBody};
 use crate::service::{GatewayService,errmg,ServiceError};
@@ -114,7 +114,7 @@ impl HttpVersion {
 		}
 	}
 
-	pub fn adapt_request(&self, cfg: &Config, act: &ConfigAction, req: Request<GatewayBody>) -> Result<Request<GatewayBody>, ServiceError> {
+	pub fn adapt_request(&self, cfg: &Config, act: &ConfigAction, req: Request<GatewayBody>, corr_id: &str) -> Result<Request<GatewayBody>, ServiceError> {
 		let src_ver = req.version();
 		let need_tr = !self.matches(src_ver);
 		let rewrite_host = act.get_rewrite_host();
@@ -132,6 +132,7 @@ impl HttpVersion {
 			.method(req.method())
 			.version(tgt_ver);
 
+		let mut host_done = false;
 		for (key, value) in hdrs.iter() {
 			if key == "host" {
 				if rewrite_host.is_some() {
@@ -145,6 +146,7 @@ impl HttpVersion {
 					}
 					continue;
 				}
+				host_done = true;
 			}
 
 			modified_request = modified_request.header(key, value);
@@ -152,12 +154,25 @@ impl HttpVersion {
 		if let Some(repl) = act.get_rewrite_host() {
 			if self.h1() {
 				modified_request = modified_request.header("host", repl.clone());
+				host_done = true;
 			}
 			if self.h2() {
 				if let Ok(auth) = Authority::from_str(repl.as_str()) {
 					urip.authority = Some(auth);
 				}
 			}
+		}
+
+		if self.h1() {
+			if !host_done {
+				if let Some(auth) = urip.authority {
+					modified_request = modified_request.header("host", auth.as_str());
+				} else {
+					warn!("{}Missing HOST header", corr_id);
+				}
+			}
+			urip.scheme = None;
+			urip.authority = None;
 		}
 
 		if self.h2() {
@@ -180,15 +195,34 @@ impl HttpVersion {
 	}
 
 	pub fn serve(&self, io: TokioIo<Box<dyn Stream>>, svc: GatewayService, graceful: &GracefulShutdown) {
-		let conn = http1::Builder::new()
-				.timer(TokioTimer::new())
-				.serve_connection(io, svc);
-		let fut = graceful.watch(conn);
-		tokio::task::spawn(async move {
-			if let Err(err) = fut.await {
-				debug!("Client connection terminated {:?}", err);
+		match self {
+			HttpVersion::H1 => {
+				let conn = http1::Builder::new()
+						.timer(TokioTimer::new())
+						.serve_connection(io, svc);
+				let fut = graceful.watch(conn);
+				tokio::task::spawn(async move {
+					if let Err(err) = fut.await {
+						debug!("Client connection terminated {:?}", err);
+					}
+				});
+			},
+			HttpVersion::H2 => {
+				let executor = hyper_util::rt::tokio::TokioExecutor::new();
+				let conn = http2::Builder::new(executor)
+						.timer(TokioTimer::new())
+						.serve_connection(io, svc);
+				let fut = graceful.watch(conn);
+				tokio::task::spawn(async move {
+					if let Err(err) = fut.await {
+						debug!("Client connection terminated {:?}", err);
+					}
+				});
 			}
-		});
+			HttpVersion::H2C => {
+				error!("h2c server-side protocol not supported");
+			}
+		}
 	}
 }
 
