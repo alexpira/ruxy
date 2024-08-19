@@ -7,11 +7,10 @@ Ruxy is an HTTP transparent reverse proxy that can be useful for inspecting or c
 
 Features include (or will include):
 
-- **request and response header logging**
-- **request payload logging**
+- **request and response headers/payload logging**
 - **SSL adding/stripping**
-- **http version translation** (\*)
-- **canary releases**: put ruxy in front of two releases of the same application and use it to split traffic among them (\*)
+- **http version translation**
+- **canary releases**: put ruxy in front of two releases of the same application and use it to split traffic among them
 - **extensible**: plan is to support a scripting language (maybe [lua](https://www.lua.org/)) to add your own behavior to ruxy (\*)
 
 **Note**: This aplication is still under development and features marked with a (\*) are still not available
@@ -26,17 +25,26 @@ and run by just launching it:
 
 	./target/release/ruxy
 
-On startup, ruxy will look for a `config.toml` file in the current directory and for some environment variables (see below for details) for its configuration. To use a different configuration file, provide its reference in the command line: `./ruxy -f /etc/ruxy.toml`
+On startup, ruxy will look for a `config.toml` file in the current directory and for some environment variables (see below for details) for its configuration. To use a different configuration file, provide its reference in the command line, i.e. `./ruxy -f /etc/ruxy.toml`
 
 Ruxy can also be built as a docker image:
 
 	docker build -t ruxy:latest .
 
+### Configuration via environment
+
+The full configuration toml content can be set to a single environment variable by running `./ruxy -e [ENV_NAME]`. That can be useful in k8s/docker environments as it simplifies deployment configuration.
+Also, some global configurations can be specified via the following environment variables:
+
+- **BIND**: the bind address and port for the listening socket (i.e. 127.0.0.1:8080)
+- **REMOTE**: default remote url to send requests
+- **REWRITE_HOST**: set to *true* to rewrite `Host` http header according to remote url
+
+That allows a minimal setup to be done very easily without a configuration file (i.e. `BIND=0.0.0.0:8080 REMOTE=https://www.alessandropira.org/ REWRITE_HOST=true ./ruxy`).
+
 ### Configuration
 
 Ruxy configuration file contains a main section where all the default behaviors are defined, and a `[filter]` section where you can define configuration overrides for specific HTTP requests.
-
-Main section values can be also specified as environment variables.
 
 This documentation, like the application itself, is still under development and for now you won't get all the details here, but the two values you always need to specify are **bind** and **remote** which are, respectively, the bind address for the listening socket and the url of the proxied application.
 
