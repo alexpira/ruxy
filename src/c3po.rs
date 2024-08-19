@@ -1,13 +1,13 @@
 
 use hyper_util::rt::tokio::TokioIo;
 use log::warn;
-use hyper::{Request,Method,StatusCode,Version,Uri};
+use hyper::{Request,Response,StatusCode,Version,Uri};
 use http::uri::{Scheme,Authority};
 use std::str::FromStr;
 
 use crate::net::{Stream,Sender,keepalive,GatewayBody};
 use crate::service::{errmg,ServiceError};
-use crate::config::ConfigAction;
+use crate::config::{Config,ConfigAction};
 
 #[derive(Clone,Copy,PartialEq)]
 pub enum HttpVersion { H1, H2, H2C /*, TODO: H3*/ }
@@ -81,17 +81,17 @@ impl HttpVersion {
 		}
 	}
 
-	pub fn adapt(&self, cfg: &ConfigAction, req: Request<GatewayBody>) -> Result<Request<GatewayBody>, ServiceError> {
+	pub fn adapt_request(&self, cfg: &Config, act: &ConfigAction, req: Request<GatewayBody>) -> Result<Request<GatewayBody>, ServiceError> {
 		let src_ver = req.version();
 		let need_tr = !self.matches(src_ver);
-		let rewrite_host = cfg.get_rewrite_host();
+		let rewrite_host = act.get_rewrite_host();
 
 		let mut urip = req.uri().clone().into_parts();
 
 		let tgt_ver = if need_tr {
-			src_ver
-		} else {
 			self.to_version()
+		} else {
+			src_ver
 		};
 		let hdrs = req.headers();
 
@@ -116,7 +116,7 @@ impl HttpVersion {
 
 			modified_request = modified_request.header(key, value);
 		}
-		if let Some(repl) = cfg.get_rewrite_host() {
+		if let Some(repl) = act.get_rewrite_host() {
 			if self.h1() {
 				modified_request = modified_request.header("host", repl.clone());
 			}
@@ -128,12 +128,22 @@ impl HttpVersion {
 		}
 
 		if self.h2() {
-			urip.scheme = Some(Scheme::from_str("https").unwrap()); // TODO
+			let ssl = if rewrite_host.is_some() {
+				act.get_remote().ssl()
+			} else {
+				cfg.server_ssl()
+			};
+
+			urip.scheme = Some(if ssl { Scheme::HTTPS } else { Scheme::HTTP });
 		}
 
 		modified_request = modified_request.uri(Uri::from_parts(urip).unwrap());
 
 		errmg!(modified_request.body(req.into_body()))
+	}
+
+	pub fn adapt_response(&self, _act: &ConfigAction, response: Response<GatewayBody>) -> Result<Response<GatewayBody>, ServiceError> {
+		Ok(response)
 	}
 }
 

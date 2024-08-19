@@ -1,6 +1,6 @@
 
 use hyper::body::Incoming;
-use hyper::{Request,Response,StatusCode};
+use hyper::{Request,Response,StatusCode,HeaderMap};
 use tokio::net::TcpStream;
 use hyper::service::Service;
 use std::pin::Pin;
@@ -118,55 +118,75 @@ impl GatewayService {
 		}
 	}
 
-	fn mangle_request(cfg: &ConfigAction, req: Request<Incoming>, corr_id: &str) -> Result<Request<GatewayBody>, ServiceError> {
-		if cfg.log() {
+	fn log_headers(hdrs: &HeaderMap, corr_id: &str, step: &str) {
+		for (key, value) in hdrs.iter() {
+			info!("{}{} {:?}: {:?}", corr_id, step, key, value);
+		}
+	}
+
+	fn log_request(action: &ConfigAction, req: &Request<GatewayBody>, corr_id: &str, step: &str) {
+		if action.log() {
 			let uri = req.uri().clone();
-			info!("{}REQUEST {:?} {} {} {}", corr_id, req.version(), req.method(), uri.path(), uri.query().unwrap_or("-"));
+			info!("{}{} {:?} {} {} {} {} {}",
+				corr_id, step,
+				req.version(),
+				req.method(),
+				uri.scheme().map(|v| v.as_str()).unwrap_or("-"),
+				uri.authority().map(|v| v.as_str()).unwrap_or("-"),
+				uri.path(),
+				uri.query().unwrap_or("-"));
 		}
 
-		if cfg.log_headers() {
-			let hdrs = req.headers();
-			for (key, value) in hdrs.iter() {
-				info!("{} -> {:?}: {:?}", corr_id, key, value);
-			}
+		if action.log_headers() {
+			Self::log_headers(req.headers(), corr_id, step);
 		}
 
+	}
+
+	fn log_reply(action: &ConfigAction, rep: &Response<GatewayBody>, corr_id: &str, step: &str) {
+		if action.log() {
+			info!("{}{} {:?} {:?}", corr_id, step, rep.version(), rep.status());
+		}
+
+		if action.log_headers() {
+			Self::log_headers(rep.headers(), corr_id, step);
+		}
+	}
+
+	fn mangle_request(cfg: &Config, action: &ConfigAction, req: Request<Incoming>, corr_id: &str) -> Result<Request<GatewayBody>, ServiceError> {
 		let req = req.map(|v| {
 			let mut body = GatewayBody::wrap(v);
-			if cfg.log_request_body() {
-				body.log_payload(true, cfg.max_request_log_size(), format!("{}REQUEST ", corr_id));
+			if action.log_request_body() {
+				body.log_payload(true, action.max_request_log_size(), format!("{}->PAYLOAD ", corr_id));
 			}
 			body
 		});
-
-		let modified_request = cfg.client_version().adapt(cfg, req)?;
+		Self::log_request(action, &req, corr_id, "->R");
+		let modified_request = action.client_version().adapt_request(cfg, action, req)?;
+		Self::log_request(action, &modified_request, corr_id, "R->");
 		Ok(modified_request)
 	}
 
-	fn mangle_reply(cfg: &ConfigAction, remote_resp: Response<Incoming>, corr_id: &str) -> Result<Response<GatewayBody>, ServiceError> {
-		if cfg.log() {
-			let status = remote_resp.status();
-			info!("{}REPLY {:?} {:?}", corr_id, remote_resp.version(), status);
-		}
-		if cfg.log_headers() {
-			remote_resp.headers().iter().for_each(|(k,v)| info!("{} <- {:?}: {:?}", corr_id, k, v));
-		}
-
-		Ok(remote_resp.map(|v| {
+	fn mangle_reply(action: &ConfigAction, remote_resp: Response<Incoming>, corr_id: &str) -> Result<Response<GatewayBody>, ServiceError> {
+		let response = remote_resp.map(|v| {
 			let mut body = GatewayBody::wrap(v);
-			if cfg.log_reply_body() {
-				body.log_payload(true, cfg.max_reply_log_size(), format!("{}REPLY ", corr_id));
+			if action.log_reply_body() {
+				body.log_payload(true, action.max_reply_log_size(), format!("{}<-PAYLOAD ", corr_id));
 			}
 			body
-		}))
+		});
+		Self::log_reply(action, &response, corr_id, "R<-");
+		let modified_response = action.client_version().adapt_response(action, response)?;
+		Self::log_reply(action, &modified_response, corr_id, "<-R");
+		Ok(modified_response)
 	}
 
-	async fn get_sender(cfg: &ConfigAction) -> Result<CachedSender, ServiceError> {
-		let remote = cfg.get_remote();
+	async fn get_sender(action: &ConfigAction) -> Result<CachedSender, ServiceError> {
+		let remote = action.get_remote();
 		let address = remote.address();
 		let conn_pool_key = remote_pool_key!(address);
-		let httpver = cfg.client_version();
-		let ssldata: SslData = (cfg.get_ssl_mode(), httpver, cfg.get_ca_file());
+		let httpver = action.client_version();
+		let ssldata: SslData = (action.get_ssl_mode(), httpver, action.get_ca_file());
 
 		let sender = if let Some(mut pool) = remote_pool_get!(&conn_pool_key) {
 			if pool.check().await {
@@ -192,9 +212,9 @@ impl GatewayService {
 		})
 	}
 
-	async fn forward(cfg: &ConfigAction, req: Request<Incoming>, corr_id: &str) -> Result<Response<Incoming>, ServiceError> {
-		let remote_request = Self::mangle_request(cfg, req, corr_id)?;
-		let mut sender = Self::get_sender(cfg).await?;
+	async fn forward(cfg: &Config, action: &ConfigAction, req: Request<Incoming>, corr_id: &str) -> Result<Response<Incoming>, ServiceError> {
+		let remote_request = Self::mangle_request(cfg, action, req, corr_id)?;
+		let mut sender = Self::get_sender(action).await?;
 		let rv = errmg!(sender.value.send(remote_request).await);
 
 		remote_pool_release!(&sender.key, sender.value);
@@ -213,15 +233,17 @@ impl Service<Request<Incoming>> for GatewayService {
 		let headers = req.headers().clone();
 		let cfg_local = self.cfg.clone();
 
-		let (cfg,rules) = (*cfg_local.lock().unwrap_or_else(|mut e| {
+		let mut cfg = (*cfg_local.lock().unwrap_or_else(|mut e| {
 			**e.get_mut() = self.original_cfg.clone();
 			cfg_local.clear_poison();
 			e.into_inner()
-		})).get_request_config(&method, &uri, &headers);
+		})).clone();
+
+		let (action, rules) = cfg.get_request_config(&method, &uri, &headers);
 
 		Box::pin(async move {
 			let corr_id = format!("{:?} ", uuid::Uuid::new_v4());
-			if cfg.log() {
+			if action.log() {
 				if rules.is_empty() {
 					debug!("{}No rules found", corr_id);
 				} else {
@@ -229,14 +251,14 @@ impl Service<Request<Incoming>> for GatewayService {
 				}
 			}
 
-			Self::forward(&cfg, req, &corr_id)
+			Self::forward(&cfg, &action, req, &corr_id)
 				.await
 				.and_then(|remote_resp| {
 					if let Ok(mut locked) = cfg_local.lock() {
 						let status = remote_resp.status();
 						locked.notify_reply(rules, &status);
 					}
-					Self::mangle_reply(&cfg, remote_resp, &corr_id)
+					Self::mangle_reply(&action, remote_resp, &corr_id)
 				}).or_else(|e| {
 					error!("Call forward failed: {:?}", e.message);
 					Response::builder()
