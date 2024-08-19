@@ -173,9 +173,7 @@ impl HttpVersion {
 			}
 			urip.scheme = None;
 			urip.authority = None;
-		}
-
-		if self.h2() {
+		} else if self.h2() {
 			let ssl = if rewrite_host.is_some() {
 				act.get_remote().ssl()
 			} else {
