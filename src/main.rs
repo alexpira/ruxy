@@ -1,9 +1,9 @@
 
-use hyper::server::conn::http1;
 use tokio::net::TcpListener;
-use hyper_util::rt::tokio::{TokioIo, TokioTimer};
+use hyper_util::rt::tokio::TokioIo;
+use hyper_util::server::graceful::GracefulShutdown;
 use tokio::signal::unix::{signal, SignalKind};
-use log::{debug,info,warn,error};
+use log::{info,warn,error};
 use std::{fs,path::Path,env,time::Duration};
 
 use net::{Stream,config_socket};
@@ -84,10 +84,11 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
 	logcfg::set_log_level(cfg.get_log_level());
 	let addr = cfg.get_bind();
+	let srv_version = cfg.server_version();
 
 	let svc = GatewayService::new(cfg.clone());
 
-	let graceful = hyper_util::server::graceful::GracefulShutdown::new();
+	let graceful = GracefulShutdown::new();
 	let mut signal_int = std::pin::pin!(shutdown_signal_int());
 	let mut signal_term = std::pin::pin!(shutdown_signal_term());
 
@@ -121,16 +122,7 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 				};
 				if let Some(tcp) = tcp {
 					let io = TokioIo::new(tcp);
-					let svc_clone = svc.clone();
-					let conn = http1::Builder::new()
-							.timer(TokioTimer::new())
-							.serve_connection(io, svc_clone);
-					let fut = graceful.watch(conn);
-					tokio::task::spawn(async move {
-						if let Err(err) = fut.await {
-							debug!("Client connection terminated {:?}", err);
-						}
-					});
+					srv_version.serve(io, svc.clone(), &graceful);
 				}
 			},
 			_ = &mut signal_int => {

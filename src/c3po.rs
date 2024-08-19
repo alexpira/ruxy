@@ -1,13 +1,15 @@
 
-use hyper_util::rt::tokio::TokioIo;
+use hyper_util::rt::tokio::{TokioIo, TokioTimer};
+use hyper_util::server::graceful::GracefulShutdown;
 use hyper::{Request,Response,StatusCode,Version,Uri};
+use hyper::server::conn::http1;
 use hyper::upgrade::Upgraded;
 use http::uri::{Scheme,Authority};
 use std::str::FromStr;
-use log::warn;
+use log::{debug,warn};
 
 use crate::net::{Stream,Sender,keepalive,GatewayBody};
-use crate::service::{errmg,ServiceError};
+use crate::service::{GatewayService,errmg,ServiceError};
 use crate::config::{Config,ConfigAction};
 
 #[derive(Clone,Copy,PartialEq)]
@@ -175,6 +177,18 @@ impl HttpVersion {
 
 	pub fn adapt_response(&self, _act: &ConfigAction, response: Response<GatewayBody>) -> Result<Response<GatewayBody>, ServiceError> {
 		Ok(response)
+	}
+
+	pub fn serve(&self, io: TokioIo<Box<dyn Stream>>, svc: GatewayService, graceful: &GracefulShutdown) {
+		let conn = http1::Builder::new()
+				.timer(TokioTimer::new())
+				.serve_connection(io, svc);
+		let fut = graceful.watch(conn);
+		tokio::task::spawn(async move {
+			if let Err(err) = fut.await {
+				debug!("Client connection terminated {:?}", err);
+			}
+		});
 	}
 }
 
