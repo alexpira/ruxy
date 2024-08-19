@@ -33,9 +33,12 @@ impl HttpVersion {
 
     async fn upgrade_1to2(target: String, mut sender: hyper::client::conn::http1::SendRequest<GatewayBody>) -> Result<Upgraded, ServiceError> {
         let req = errmg!(Request::builder()
-            .uri(target)
-            .header(hyper::header::CONNECTION, "upgrade")
-            .header(hyper::header::UPGRADE, "HTTP/2.0")
+			.method("HEAD")
+            .uri("/")
+            .header(hyper::header::HOST, target)
+            .header(hyper::header::CONNECTION, "Upgrade, HTTP2-Settings")
+            .header(hyper::header::UPGRADE, "h2c")
+			.header("HTTP2-Settings", "AAMAAABkAAQAoAAAAAIAAAAA")
             .body(GatewayBody::empty()))?;
 
         let res = errmg!(sender.send_request(req).await)?;

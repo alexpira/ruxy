@@ -10,7 +10,7 @@ use std::error::Error;
 use std::fmt;
 use std::fmt::Debug;
 use hyper_util::rt::tokio::TokioIo;
-use log::{debug,info,warn,error,log_enabled,Level};
+use log::{debug,info,warn,error};
 use std::time::Duration;
 
 use crate::pool::{remote_pool_key,remote_pool_get,remote_pool_release};
@@ -96,20 +96,20 @@ impl GatewayService {
 		}
 	}
 
-	async fn connect(address: (String,u16), ssldata: SslData, remote: &RemoteConfig) -> Result<Box<dyn Stream>, ServiceError> {
+	async fn connect(address: (String,u16), ssldata: SslData, remote: &RemoteConfig, log_stream: bool) -> Result<Box<dyn Stream>, ServiceError> {
 		let stream = errmg!(TcpStream::connect(address).await)?;
 		config_socket!(stream);
 
 		if remote.ssl() {
 			let stream = crate::ssl::wrap_client( stream, ssldata, remote ).await?;
-			if log_enabled!(Level::Trace) {
+			if log_stream {
 				let stream = crate::net::LoggingStream::wrap(stream);
 				Ok(Box::new(stream))
 			} else {
 				Ok(Box::new(stream))
 			}
 		} else {
-			if log_enabled!(Level::Trace) {
+			if log_stream {
 				let stream = crate::net::LoggingStream::wrap(stream);
 				Ok(Box::new(stream))
 			} else {
@@ -181,7 +181,7 @@ impl GatewayService {
 		Ok(modified_response)
 	}
 
-	async fn get_sender(action: &ConfigAction) -> Result<CachedSender, ServiceError> {
+	async fn get_sender(cfg: &Config, action: &ConfigAction) -> Result<CachedSender, ServiceError> {
 		let remote = action.get_remote();
 		let address = remote.address();
 		let httpver = action.client_version();
@@ -201,7 +201,7 @@ impl GatewayService {
 		let sender = if let Some(v) = sender {
 			v
 		} else {
-			let stream = Self::connect(address, ssldata, &remote).await?;
+			let stream = Self::connect(address, ssldata, &remote, cfg.log_stream()).await?;
 			let io = TokioIo::new( stream );
 			httpver.handshake(remote.raw(), io).await?
 		};
@@ -214,7 +214,7 @@ impl GatewayService {
 
 	async fn forward(cfg: &Config, action: &ConfigAction, req: Request<Incoming>, corr_id: &str) -> Result<Response<Incoming>, ServiceError> {
 		let remote_request = Self::mangle_request(cfg, action, req, corr_id)?;
-		let mut sender = Self::get_sender(action).await?;
+		let mut sender = Self::get_sender(cfg, action).await?;
 		let rv = errmg!(sender.value.send(remote_request).await);
 
 		remote_pool_release!(&sender.key, sender.value);

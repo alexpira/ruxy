@@ -406,6 +406,7 @@ struct RawConfig {
 	remote: Option<String>,
 	bind: Option<String>,
 	rewrite_host: Option<bool>,
+	log_stream: Option<bool>,
 	http_server_version: Option<String>,
 	http_client_version: Option<String>,
 	graceful_shutdown_timeout: Option<String>,
@@ -439,6 +440,7 @@ impl RawConfig {
 			log_level: None,
 			log: None,
 			log_headers: None,
+			log_stream: None,
 			log_request_body: None,
 			log_reply_body: None,
 			max_request_log_size: None,
@@ -484,6 +486,7 @@ impl RawConfig {
 		self.log_level = self.log_level.take().or(other.log_level);
 		self.log = self.log.take().or(other.log);
 		self.log_headers = self.log_headers.take().or(other.log_headers);
+		self.log_stream = self.log_stream.take().or(other.log_stream);
 		self.log_request_body = self.log_request_body.take().or(other.log_request_body);
 		self.max_request_log_size = self.max_request_log_size.take().or(other.max_request_log_size);
 		self.log_reply_body = self.log_reply_body.take().or(other.log_reply_body);
@@ -585,6 +588,7 @@ pub struct Config {
 	server_ssl_trust: Option<PathBuf>,
 	server_ssl_key: Option<PathBuf>,
 	log_level: LevelFilter,
+	log_stream: bool,
 	default_action: ConfigAction,
 	filters: HashMap<String,ConfigFilter>,
 	actions: HashMap<String,ConfigAction>,
@@ -625,6 +629,7 @@ impl Config {
 			filters: raw_cfg.get_filters(),
 			actions: raw_cfg.get_actions(),
 			rules: raw_cfg.get_rules(),
+			log_stream: raw_cfg.log_stream.unwrap_or(false),
 		})
 	}
 
@@ -691,6 +696,10 @@ impl Config {
 
 	pub fn get_log_level(&self) -> LevelFilter {
 		self.log_level
+	}
+
+	pub fn log_stream(&self) -> bool {
+		self.log_stream
 	}
 
 	fn parse_bind(rc: &RawConfig) -> SocketAddr {
