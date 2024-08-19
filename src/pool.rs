@@ -81,7 +81,7 @@ lazy_static! {
 }
 
 macro_rules! remote_pool_key {
-	($addr: expr) => { format!("{}:{}", $addr.0.to_lowercase(), $addr.1) }
+	($addr: expr, $httpver: expr) => { format!("{}:{}:{:?}", $addr.0.to_lowercase(), $addr.1, $httpver.id()) }
 }
 pub(crate) use remote_pool_key;
 

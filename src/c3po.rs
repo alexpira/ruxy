@@ -81,6 +81,14 @@ impl HttpVersion {
 		}
 	}
 
+	pub fn id(&self) -> &'static str {
+		match self {
+			HttpVersion::H1 => "h1",
+			HttpVersion::H2 => "h2",
+			HttpVersion::H2C => "h2c",
+		}
+	}
+
 	pub fn adapt_request(&self, cfg: &Config, act: &ConfigAction, req: Request<GatewayBody>) -> Result<Request<GatewayBody>, ServiceError> {
 		let src_ver = req.version();
 		let need_tr = !self.matches(src_ver);

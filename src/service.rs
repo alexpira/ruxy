@@ -184,8 +184,8 @@ impl GatewayService {
 	async fn get_sender(action: &ConfigAction) -> Result<CachedSender, ServiceError> {
 		let remote = action.get_remote();
 		let address = remote.address();
-		let conn_pool_key = remote_pool_key!(address);
 		let httpver = action.client_version();
+		let conn_pool_key = remote_pool_key!(address,httpver);
 		let ssldata: SslData = (action.get_ssl_mode(), httpver, action.get_ca_file());
 
 		let sender = if let Some(mut pool) = remote_pool_get!(&conn_pool_key) {
