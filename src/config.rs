@@ -419,7 +419,7 @@ struct RawConfig {
 	max_request_log_size: Option<i64>,
 	log_reply_body: Option<bool>,
 	max_reply_log_size: Option<i64>,
-	server_ssl_trust: Option<String>,
+	server_ssl_cert: Option<String>,
 	server_ssl_key: Option<String>,
 	filters: Option<toml::Table>,
 	actions: Option<toml::Table>,
@@ -435,7 +435,7 @@ impl RawConfig {
 			graceful_shutdown_timeout: Self::env_str("GRACEFUL_SHUTDOWN_TIMEOUT"),
 			ssl_mode: Self::env_str("SSL_MODE"),
 			cafile: Self::env_str("CAFILE"),
-			server_ssl_trust: Self::env_str("SERVER_SSL_TRUST"),
+			server_ssl_cert: Self::env_str("SERVER_SSL_CERT"),
 			server_ssl_key: Self::env_str("SERVER_SSL_KEY"),
 			http_server_version: None,
 			http_client_version: None,
@@ -491,7 +491,7 @@ impl RawConfig {
 		self.max_request_log_size = self.max_request_log_size.take().or(other.max_request_log_size);
 		self.log_reply_body = self.log_reply_body.take().or(other.log_reply_body);
 		self.max_reply_log_size = self.max_reply_log_size.take().or(other.max_reply_log_size);
-		self.server_ssl_trust = self.server_ssl_trust.take().or(other.server_ssl_trust);
+		self.server_ssl_cert = self.server_ssl_cert.take().or(other.server_ssl_cert);
 		self.server_ssl_key = self.server_ssl_key.take().or(other.server_ssl_key);
 		self.filters = self.filters.take().or(other.filters);
 		self.actions = self.actions.take().or(other.actions);
@@ -585,7 +585,7 @@ pub struct Config {
 	bind: SocketAddr,
 	http_server_version: HttpVersion,
 	graceful_shutdown_timeout: Duration,
-	server_ssl_trust: Option<PathBuf>,
+	server_ssl_cert: Option<PathBuf>,
 	server_ssl_key: Option<PathBuf>,
 	log_level: LevelFilter,
 	log_stream: bool,
@@ -623,7 +623,7 @@ impl Config {
 			bind: Self::parse_bind(&raw_cfg),
 			graceful_shutdown_timeout: Self::parse_graceful_shutdown_timeout(&raw_cfg),
 			http_server_version: Self::parse_http_version(&raw_cfg.http_server_version).unwrap_or(HttpVersion::H1),
-			server_ssl_trust: Self::parse_file(&raw_cfg.server_ssl_trust),
+			server_ssl_cert: Self::parse_file(&raw_cfg.server_ssl_cert),
 			server_ssl_key: Self::parse_file(&raw_cfg.server_ssl_key),
 			log_level: Self::parse_log_level(&raw_cfg.log_level),
 			filters: raw_cfg.get_filters(),
@@ -683,11 +683,11 @@ impl Config {
 	}
 
 	pub fn server_ssl(&self) -> bool {
-		self.server_ssl_trust.is_some() && self.server_ssl_key.is_some()
+		self.server_ssl_cert.is_some() && self.server_ssl_key.is_some()
 	}
 
 	pub fn get_server_ssl_cafile(&self) -> Option<PathBuf> {
-		self.server_ssl_trust.clone()
+		self.server_ssl_cert.clone()
 	}
 
 	pub fn get_server_ssl_keyfile(&self) -> Option<PathBuf> {

@@ -8,16 +8,16 @@ Ruxy is an HTTP transparent reverse proxy that can be useful for inspecting or c
 Features include (or will include):
 
 - **request and response headers/payload logging**
-- **SSL adding/stripping**
+- **TLS adding/stripping**
 - **http version translation**
 - **canary releases**: put ruxy in front of two releases of the same application and use it to split traffic among them
 - **extensible**: plan is to support a scripting language (maybe [lua](https://www.lua.org/)) to add your own behavior to ruxy (\*)
 
-**Note**: This aplication is still under development and features marked with a (\*) are still not available
+**Note**: This application is still under development and features marked with a (\*) are still not available
 
-### Running
+### Building
 
-Ruxy can be built locally with:
+Ruxy is developed with [rust](https://www.rust-lang.org/) so in order to build ruxy you first need to have rust installed. Then, ruxy can be built by running:
 
 	cargo build --release
 
@@ -44,9 +44,9 @@ That allows a minimal setup to be done very easily without a configuration file 
 
 ### Configuration
 
-Ruxy configuration file contains a main section where all the default behaviors are defined, and a `[filter]` section where you can define configuration overrides for specific HTTP requests.
+Ruxy configuration file contains a main section where all the default behaviors are defined, and subsections where you can define configuration overrides for specific HTTP requests.
 
-This documentation, like the application itself, is still under development and for now you won't get all the details here, but the two values you always need to specify are **bind** and **remote** which are, respectively, the bind address for the listening socket and the url of the proxied application.
+This documentation, like the application itself, is still under development and for now you won't get all the details here, but the two values you always need to specify in the main part are **bind** and **remote** which are, respectively, the bind address for the listening socket and the url of the proxied application.
 
 Exceptions to the default configurations are specified via *rules*, *actions* and *filters*.
 Actions represent behavior flags for a single request, while filters are used to match a request. Rules are made of composition of filters and actions.
@@ -58,12 +58,12 @@ Minimal configuration:
 	bind = "localhost:8080"
 	remote = "https://www.alessandropira.org/"
 
-SSL adding:
+TLS adding:
 
 	bind = "0.0.0.0:443"
 	remote = "http://localhost:8080/"
 
-	server_ssl_trust = "./cert.pem"
+	server_ssl_cert = "./cert.pem"
 	server_ssl_key = "./key.pem"
 
 Log request payload for POSTs on a specific path and all headers on every request:
@@ -95,6 +95,41 @@ Redirect traffic having a specific header to a different endpoint:
 
 	[rules]
 	r1 = { filters = [ "has_api_key" ], actions = [ "redirect" ] }
+
+#### Main section parameters
+
+Main section is used for generic parameters. Every parameter that can be defined for an action (see below "actions section") can also be present in the main section and will cotribute to define the default behavior of ruxy.
+
+**bind**: address and port for the listening socket, i.e.: `127.0.0.1:8080`
+**server_ssl_cert** and **server_ssl_key**: certificate and private key file for enabling TLS on listening socket
+**graceful_shutdown_timeout**: ruxy after receiving INT or TERM signals waits for this timeout to allow graceful termination of existing connections before shutting down; it must be specified as a string containing a number and one of the suffixes `"min"`, `"sec"` or `"ms"`; i.e.: `10sec` or `200ms`
+**log_stream**: boolean, enables low level log of all *server side* sent and received data (inside TLS), very verbose and useful for debugging of ruxy itself
+**http_server_version**: either "h1" (default) or "h2"; used to define http version used on listening socket
+
+Also, the following values can be defined in the main section to define the default behavior of ruxy: **remote** (mandatory), **rewrite_host**, **http_client_version**, **ssl_mode**, **cafile**, **log**, **log_level**, **log_headers**, **log_request_body**, **max_request_log_size**, **log_reply_body**, **max_reply_log_size**. See *actions* section for details.
+
+#### rules section
+
+Rules are used to define overrides and are checked for every incoming request.
+
+Inside rules section you can define values which can be described as json. Every rule can have a list of filters and a list of actions.
+
+For every icoming http request ruxy does the following:
+
+- it checks every rule in the configuration
+- for every rule, if there are filters defined, all the filters must match the incoming request, otherwise the rule is discarded
+- the first matching rule is picked (rules are checked in alphabetical order)
+- all the actions in the picked rule are applied for that specific request
+
+TBD
+
+#### filters section
+
+TBD
+
+#### actions section
+
+TBD
 
 ### Notes on AI training
 
