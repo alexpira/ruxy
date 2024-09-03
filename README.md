@@ -38,7 +38,7 @@ Also, some global configurations can be specified via the following environment 
 
 - **BIND**: the bind address and port for the listening socket (i.e. 127.0.0.1:8080)
 - **REMOTE**: default remote url to send requests
-- **REWRITE_HOST**: set to *true* to rewrite `Host` http header according to remote url
+- **REWRITE_HOST**: set to *true* to rewrite `Host` HTTP header according to remote url
 
 That allows a minimal setup to be done very easily without a configuration file (i.e. `BIND=0.0.0.0:8080 REMOTE=https://www.alessandropira.org/ REWRITE_HOST=true ./ruxy`).
 
@@ -100,36 +100,73 @@ Redirect traffic having a specific header to a different endpoint:
 
 Main section is used for generic parameters. Every parameter that can be defined for an action (see below "actions section") can also be present in the main section and will cotribute to define the default behavior of ruxy.
 
-**bind**: address and port for the listening socket, i.e.: `127.0.0.1:8080`
-**server_ssl_cert** and **server_ssl_key**: certificate and private key file for enabling TLS on listening socket
-**graceful_shutdown_timeout**: ruxy after receiving INT or TERM signals waits for this timeout to allow graceful termination of existing connections before shutting down; it must be specified as a string containing a number and one of the suffixes `"min"`, `"sec"` or `"ms"`; i.e.: `10sec` or `200ms`
-**log_stream**: boolean, enables low level log of all *server side* sent and received data (inside TLS), very verbose and useful for debugging of ruxy itself
-**http_server_version**: either "h1" (default) or "h2"; used to define http version used on listening socket
+- **bind**: address and port for the listening socket, i.e.: `127.0.0.1:8080`
+- **server_ssl_cert** and **server_ssl_key**: certificate and private key file for enabling TLS on listening socket
+- **graceful_shutdown_timeout**: ruxy after receiving INT or TERM signals waits for this timeout to allow graceful termination of existing connections before shutting down; it must be specified as a string containing a number and one of the suffixes `"min"`, `"sec"` or `"ms"`; i.e.: `10sec` or `200ms`
+- **log_stream**: boolean, enables low level log of all *server side* sent and received data (inside TLS), very verbose and useful for debugging of ruxy itself
+- **http_server_version**: either "h1" (default) or "h2"; used to define HTTP version used on listening socket
 
 Also, the following values can be defined in the main section to define the default behavior of ruxy: **remote** (mandatory), **rewrite_host**, **http_client_version**, **ssl_mode**, **cafile**, **log**, **log_level**, **log_headers**, **log_request_body**, **max_request_log_size**, **log_reply_body**, **max_reply_log_size**. See *actions* section for details.
 
-#### rules section
+#### Rules section
 
 Rules are used to define overrides and are checked for every incoming request.
 
 Inside rules section you can define values which can be described as json. Every rule can have a list of filters and a list of actions.
 
-For every icoming http request ruxy does the following:
+For every icoming HTTP request ruxy does the following:
 
 - it checks every rule in the configuration
 - for every rule, if there are filters defined, all the filters must match the incoming request, otherwise the rule is discarded
 - the first matching rule is picked (rules are checked in alphabetical order)
 - all the actions in the picked rule are applied for that specific request
 
-TBD
+The following attributes can be specified for a rule:
 
-#### filters section
+- **filters**: (array of strings) names of the filters associated with the rule
+- **filter**: (string) single filter to be associated to the rule
+- **actions**: (array of strings) names of the actions associated with the rule
+- **action**: (string) single action to be associated to the rule
+- **enabled**: (boolean) setting this to false makes ruxy ignore this rule; this is mostly useful as a runtime property but it can also be set in the configuration file
+- **probability**: (float) when set, it indicates the chance that a rule will be used or ignored for a specific request; it should be set to a value between 0 and 1, i.e. if set to 0.25, the rule will be applied on an average of one request every four
+- **disable_on**: (string) regex to match to the status code of the reply, if matched on a reply, the rule will be disabled and ignored for following requests; i.e. "5..", "[4-5].\*" are reasonable values 
+- **keep_while**: (string) regex to match to the status code of the reply, if *not* matched on a reply, the rule will be disabled and ignored for following requests; i.e. "20[01]", "[2-3].." are reasonable values
+- **max_life**: (integer) if set, the rule will be applied to at most this number of requests, and then will be disabled
 
-TBD
+Note: a rule without filters will be applied to all requests.
 
-#### actions section
+#### Filters section
 
-TBD
+Filters are used to match HTTP requests in order to select the rule to apply to a request.
+
+- **method**: (string) regex to match the HTTP verb, i.e. "GET", "(HEAD)|(GET)"
+- **path**: (string) regex to match the requested path (excluding query string)
+- **headers**: (list of key-values) name of headers and relative regex to match the value
+
+#### Actions section
+
+Actions associated to the selected rule will be applied to the HTTP request before forwarding it and can be used to override the values defined in the main section.
+
+All action properties can be specified in the main section to define default ruxy behavior.
+
+- **remote**: (string) the remote url to forward requests to; this is a mandatory property in the main section
+- **rewrite_host**: (boolean) if set to *true* ruxy will rewrite the "Host" request header (":authority:" for HTTPv2) to match the remote url value; the default is *false*
+- **http_client_version**: (string) either "h1" (default) or "h2"; used to define HTTP version used for backend connection
+- **log**: (boolean) set to *true* to enable basic request logging
+- **log_headers**: (boolean) set to *true* to enable HTTP header logging; the default is *false*
+- **log_request_body**: (boolean) set to *true* to enable logging of the request payload; the default is *false*
+- **max_request_log_size**: (integer) limit size in bytes for the request payload to be logged; default is 256KB
+- **log_reply_body**: (boolean) set to *true* to enable logging of the response payload; the default is *false*
+- **max_reply_log_size**: (integer) limit size in bytes for the response payload to be logged; default is 256KB
+- **ssl_mode**: (string) definition of SSL server trust mechanism; valid values are: "builtin" (use SSL certificates compiled at build time into the executable), "file" (loads SSL certificates from a PEM file), "os" (use os-defined SSL certificates -- not available on Android), "dangerous" (skip SSL certificate checking and trust everything)
+- **cafile**: path of the file to use if ssl\_mode is set to "file"
+
+**Note on logging**: log produced by ruxy will include the following strings:
+
+- "->R" logs that refer to the incoming request received from the client
+- "R->" logs referring to the request as it is sent from ruxy to the HTTP server
+- "R<-" logs that refer to the response received from the server
+- "<-R" logs referring to the response as it is sent from ruxy to the client
 
 ### Notes on AI training
 
