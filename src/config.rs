@@ -10,6 +10,44 @@ use log::{LevelFilter,info,warn};
 
 use crate::c3po::HttpVersion;
 
+fn parse_array(v: &toml::Value) -> Option<Vec<String>> {
+	match v {
+		toml::Value::Array(ar) => {
+			let mut rv = Vec::new();
+			for inner in ar {
+				if let toml::Value::String(inst) = inner {
+					rv.push(inst.to_string())
+				}
+			}
+			if rv.is_empty() {
+				None
+			} else {
+				Some(rv)
+			}
+		},
+		toml::Value::String(st) => Some(vec!(st.to_string())),
+		_ => None,
+	}
+}
+fn parse_map(v: &toml::Value) -> Option<HashMap<String,String>> {
+	let mut parsed = HashMap::<String,String>::new();
+
+	if let toml::Value::Table(t) = v {
+		for k in t.keys() {
+			if let Some(value) = t.get(k).and_then(|v| v.as_str()) {
+				parsed.insert(k.to_string(), value.to_string());
+			}
+		}
+	}
+
+	if parsed.is_empty() {
+		None
+	} else {
+		Some(parsed)
+	}
+}
+
+
 #[derive(Clone)]
 pub struct RemoteConfig {
 	address: (String, u16),
@@ -186,6 +224,8 @@ pub struct ConfigAction {
 	max_reply_log_size: Option<i64>,
 	ssl_mode: Option<SslMode>,
 	cafile: Option<PathBuf>,
+	remove_headers: Option<Vec<String>>,
+	add_headers: Option<HashMap<String,String>>,
 }
 
 impl ConfigAction {
@@ -202,7 +242,9 @@ impl ConfigAction {
 				log_reply_body: t.get("log_reply_body").and_then(|v| v.as_bool()),
 				max_reply_log_size: t.get("max_reply_log_size").and_then(|v| v.as_integer()),
 				cafile: t.get("cafile").and_then(|v| v.as_str()).map(|v| Path::new(v).to_path_buf()),
-				ssl_mode: t.get("ssl_mode").and_then(|v| v.as_str()).map(|v| v.to_string().into())
+				ssl_mode: t.get("ssl_mode").and_then(|v| v.as_str()).map(|v| v.to_string().into()),
+				remove_headers: t.get("remove_headers").and_then(|v| parse_array(v)),
+				add_headers: t.get("add_headers").and_then(|v| parse_map(v)),
 			}),
 			_ => None,
 		}
@@ -421,6 +463,8 @@ struct RawConfig {
 	max_reply_log_size: Option<i64>,
 	server_ssl_cert: Option<String>,
 	server_ssl_key: Option<String>,
+	remove_headers: Option<toml::Value>,
+	add_headers: Option<toml::Value>,
 	filters: Option<toml::Table>,
 	actions: Option<toml::Table>,
 	rules: Option<toml::Table>,
@@ -447,6 +491,8 @@ impl RawConfig {
 			log_reply_body: None,
 			max_request_log_size: None,
 			max_reply_log_size: None,
+			remove_headers: None,
+			add_headers: None,
 			filters: None,
 			actions: None,
 			rules: None,
@@ -493,6 +539,8 @@ impl RawConfig {
 		self.max_reply_log_size = self.max_reply_log_size.take().or(other.max_reply_log_size);
 		self.server_ssl_cert = self.server_ssl_cert.take().or(other.server_ssl_cert);
 		self.server_ssl_key = self.server_ssl_key.take().or(other.server_ssl_key);
+		self.remove_headers = self.remove_headers.take().or(other.remove_headers);
+		self.add_headers = self.add_headers.take().or(other.add_headers);
 		self.filters = self.filters.take().or(other.filters);
 		self.actions = self.actions.take().or(other.actions);
 		self.rules = self.rules.take().or(other.rules);
@@ -619,6 +667,8 @@ impl Config {
 				max_request_log_size: raw_cfg.max_request_log_size,
 				log_reply_body: raw_cfg.log_reply_body,
 				max_reply_log_size: raw_cfg.max_reply_log_size,
+				remove_headers: raw_cfg.remove_headers.as_ref().and_then(|v| parse_array(v)),
+				add_headers: raw_cfg.add_headers.as_ref().and_then(|v| parse_map(v)),
 			},
 			bind: Self::parse_bind(&raw_cfg),
 			graceful_shutdown_timeout: Self::parse_graceful_shutdown_timeout(&raw_cfg),

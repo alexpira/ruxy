@@ -3,7 +3,7 @@
 bind = "localhost:8080"
 remote = "http://localhost:8000/"
 rewrite_host = false
-http_server_version = "h2"
+# http_server_version = "h2"
 
 # ssl_mode = "os"
 
@@ -17,9 +17,12 @@ graceful_shutdown_timeout = "2sec"
 # server_ssl_trust = "./test-server/cert.pem"
 # server_ssl_key = "./test-server/key.pem"
 
+
 # log_headers=true
-# log_level = "trace"
-log_stream = true
+# log_stream = true
+
+add_headers = { X-Test = "123" }
+remove_headers = [ "X-Test2" ]
 
 [filters]
 test = { path = "^/test$", method = "GET" }
@@ -34,10 +37,13 @@ log_body = { log_request_body = true }
 to_google = { remote = "https://www.google.it", rewrite_host = true }
 h2c = { http_client_version = "h2c" }
 log_reply = { log_reply_body = true }
+hdr_test = { add_headers = { X-Test-Header = "hello" }, remove_headers = [ "X-Test-Header" ] }
 
 [rules]
-r1 = { enabled = false, filter = "test", action = "to_google", disable_on = "(404)|(5..)", probability = 0.1, max_life = 10 }
-r2 = { enabled = false, action = "no_log", keep_while = "201" }
-r3 = { enabled = false, filters = ["test2_and_below","post"], actions = ["log_hdr","log_body"] }
-to_google = { filter = "root", actions = [ "to_google", "log_hdr" ] }
-h2c = { filter = "post", action = "h2c" }
+# r1 = { enabled = false, filter = "test", action = "to_google", disable_on = "(404)|(5..)", probability = 0.1, max_life = 10 }
+# r2 = { enabled = false, action = "no_log", keep_while = "201" }
+# r3 = { enabled = false, filters = ["test2_and_below","post"], actions = ["log_hdr","log_body"] }
+# to_google = { filter = "root", actions = [ "to_google", "log_hdr" ] }
+# h2c = { filter = "post", action = "h2c" }
+test = { action = "hdr_test" }
+
