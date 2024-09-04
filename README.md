@@ -152,7 +152,7 @@ All action properties can be specified in the main section to define default rux
 - **remote**: (string) the remote url to forward requests to; this is a mandatory property in the main section
 - **rewrite_host**: (boolean) if set to *true* ruxy will rewrite the "Host" request header (":authority:" for HTTPv2) to match the remote url value; the default is *false*
 - **http_client_version**: (string) either "h1" (default) or "h2"; used to define HTTP version used for backend connection
-- **log**: (boolean) set to *true* to enable basic request logging
+- **log**: (boolean) set to *false* to disable basic request logging (defaults to *true*)
 - **log_headers**: (boolean) set to *true* to enable HTTP header logging; the default is *false*
 - **log_request_body**: (boolean) set to *true* to enable logging of the request payload; the default is *false*
 - **max_request_log_size**: (integer) limit size in bytes for the request payload to be logged; default is 256KB
