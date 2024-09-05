@@ -18,11 +18,11 @@ graceful_shutdown_timeout = "2sec"
 # server_ssl_key = "./test-server/key.pem"
 
 
-# log_headers=true
+log_headers=true
 # log_stream = true
 
-add_headers = { X-Test = "123" }
-remove_headers = [ "X-Test2" ]
+add_request_headers = { X-Test = "123" }
+remove_request_headers = [ "X-Test2" ]
 
 [filters]
 test = { path = "^/test$", method = "GET" }
@@ -37,7 +37,7 @@ log_body = { log_request_body = true }
 to_google = { remote = "https://www.google.it", rewrite_host = true }
 h2c = { http_client_version = "h2c" }
 log_reply = { log_reply_body = true }
-hdr_test = { add_headers = { X-Test-Header = "hello" }, remove_headers = [ "X-Test-Header" ] }
+hdr_test = { add_request_headers = { X-Test-Header = "hello" }, remove_request_headers = [ "X-Test-Header" ] }
 
 [rules]
 # r1 = { enabled = false, filter = "test", action = "to_google", disable_on = "(404)|(5..)", probability = 0.1, max_life = 10 }
