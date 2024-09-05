@@ -96,6 +96,20 @@ Redirect traffic having a specific header to a different endpoint:
 	[rules]
 	r1 = { filters = [ "has_api_key" ], actions = [ "redirect" ] }
 
+Add an API key, replacing supplied values, before forwarding the request to the remote server
+
+	bind = "localhost:8080"
+	remote = "http://some-service/"
+
+	[filters]
+	apis = { path = "^/api/" }
+
+	[actions]
+	add_api_key = { remove_request_headers = [ "X-Api-Key" ], add_request_headers = { X-Api-Key = "some_secret" } }
+
+	[rules]
+	r1 = { filters = [ "apis" ], actions = [ "add_api_key" ] }
+
 #### Main section parameters
 
 Main section is used for generic parameters. Every parameter that can be defined for an action (see below "actions section") can also be present in the main section and will cotribute to define the default behavior of ruxy.
@@ -160,6 +174,8 @@ All action properties can be specified in the main section to define default rux
 - **max_reply_log_size**: (integer) limit size in bytes for the response payload to be logged; default is 256KB
 - **ssl_mode**: (string) definition of SSL server trust mechanism; valid values are: "builtin" (use SSL certificates compiled at build time into the executable), "file" (loads SSL certificates from a PEM file), "os" (use os-defined SSL certificates -- not available on Android), "dangerous" (skip SSL certificate checking and trust everything)
 - **cafile**: path of the file to use if ssl\_mode is set to "file"
+- **remove_request_headers**: (array of strings) list of headers to be stripped from the request before forwarding it
+- **add_request_headers**: (table containing string values) headers to be added to the request before forwarding it; note: **remove_request_headers** is processed first
 
 **Note on logging**: log produced by ruxy will include the following strings:
 
