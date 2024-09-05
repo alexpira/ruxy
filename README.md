@@ -9,6 +9,7 @@ Features include (or will include):
 
 - **request and response headers/payload logging**
 - **TLS adding/stripping**
+- **request and response header injection or removal**
 - **http version translation**
 - **canary releases**: put ruxy in front of two releases of the same application and use it to split traffic among them
 - **extensible**: plan is to support a scripting language (maybe [lua](https://www.lua.org/)) to add your own behavior to ruxy (\*)
@@ -96,7 +97,7 @@ Redirect traffic having a specific header to a different endpoint:
 	[rules]
 	r1 = { filters = [ "has_api_key" ], actions = [ "redirect" ] }
 
-Add an API key, replacing supplied values, before forwarding the request to the remote server
+Add an API key, replacing the header eventually received from the client, before forwarding the request to the remote server
 
 	bind = "localhost:8080"
 	remote = "http://some-service/"
@@ -109,6 +110,14 @@ Add an API key, replacing supplied values, before forwarding the request to the 
 
 	[rules]
 	r1 = { filters = [ "apis" ], actions = [ "add_api_key" ] }
+
+Add twice the same header to a request
+
+	bind = "localhost:8080"
+	remote = "http://some-service/"
+
+	add_request_headers = [ { header = "X-Double-Header", value = "first" }, { header = "X-Double-Header", value = "second" } ]
+
 
 #### Main section parameters
 
@@ -175,7 +184,9 @@ All action properties can be specified in the main section to define default rux
 - **ssl_mode**: (string) definition of SSL server trust mechanism; valid values are: "builtin" (use SSL certificates compiled at build time into the executable), "file" (loads SSL certificates from a PEM file), "os" (use os-defined SSL certificates -- not available on Android), "dangerous" (skip SSL certificate checking and trust everything)
 - **cafile**: path of the file to use if ssl\_mode is set to "file"
 - **remove_request_headers**: (array of strings) list of headers to be stripped from the request before forwarding it
-- **add_request_headers**: (table containing string values) headers to be added to the request before forwarding it; note: **remove_request_headers** is processed first
+- **add_request_headers**: (table or array) headers to be added to the request before forwarding it; **remove_request_headers** is processed first and to replace an header both must be used; *note*: in order to add the same header more than once an array containing tables with *header* and *value* properties can be used instead of a table... see examples
+- **remove_reply_headers**: (array of strings) same as **remove_request_headers** but applied to the response
+- **add_reply_headers**: (table or array) same as **add_request_headers** but applied to the response
 
 **Note on logging**: log produced by ruxy will include the following strings:
 

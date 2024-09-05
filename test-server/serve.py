@@ -7,8 +7,7 @@ class WebRequestHandler(BaseHTTPRequestHandler):
 		print(f'{method} {self.path}')
 
 		data = None
-		for h in self.headers:
-			v = self.headers.get(h)
+		for (h,v) in self.headers.items():
 			print(f' HDR: {h}: {v}')
 			if h.lower() == 'content-length':
 				data = self.rfile.read(int(v))
@@ -18,6 +17,7 @@ class WebRequestHandler(BaseHTTPRequestHandler):
 
 		self.send_response(200, "Yup")
 		self.send_header("Content-Type", "text/plain")
+		self.send_header("X-Sample", "response header")
 		self.end_headers()
 		self.wfile.write("Hello".encode("utf-8"))
 

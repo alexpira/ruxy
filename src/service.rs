@@ -178,6 +178,7 @@ impl GatewayService {
 		});
 		Self::log_reply(action, &response, corr_id, "R<-");
 		let modified_response = action.client_version().adapt_response(action, response)?;
+		let modified_response = action.adapt_response(modified_response, corr_id)?;
 		Self::log_reply(action, &modified_response, corr_id, "<-R");
 		Ok(modified_response)
 	}
