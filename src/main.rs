@@ -18,6 +18,13 @@ mod logcfg;
 mod net;
 mod service;
 
+async fn shutdown_signal_hup() {
+	signal(SignalKind::hangup())
+		.expect("failed to install SIGHUP signal handler")
+		.recv()
+		.await;
+}
+
 async fn shutdown_signal_int() {
 	signal(SignalKind::interrupt())
 		.expect("failed to install SIGINT signal handler")
@@ -77,14 +84,14 @@ fn load_configuration() -> Result<config::Config, Box<dyn std::error::Error + Se
 	config::Config::load(&config)
 }
 
-async fn run(cfg: config::Config) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn run(cfg: config::Config, graceful: &GracefulShutdown) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 	logcfg::set_log_level(cfg.get_log_level());
 	let addr = cfg.get_bind();
 	let srv_version = cfg.server_version();
 
 	let svc = GatewayService::new(cfg.clone());
 
-	let graceful = GracefulShutdown::new();
+//	let mut signal_hup = Box::pin(shutdown_signal_hup()); // TODO: configuration hot-reload
 	let mut signal_int = std::pin::pin!(shutdown_signal_int());
 	let mut signal_term = std::pin::pin!(shutdown_signal_term());
 
@@ -101,6 +108,7 @@ async fn run(cfg: config::Config) -> Result<(), Box<dyn std::error::Error + Send
 
 	let listener = TcpListener::bind(addr).await?;
 	info!("Listening on http{}://{}", if ssl { "s" } else { "" }, addr);
+
 	loop {
 		tokio::select! {
 			Ok((tcp, _addr)) = listener.accept() => {
@@ -118,9 +126,14 @@ async fn run(cfg: config::Config) -> Result<(), Box<dyn std::error::Error + Send
 				};
 				if let Some(tcp) = tcp {
 					let io = TokioIo::new(tcp);
-					srv_version.serve(io, svc.clone(), &graceful);
+					srv_version.serve(io, svc.clone(), graceful);
 				}
 			},
+			// TODO: configuration hot-reload
+			/* _ = &mut signal_hup => {
+				info!("signal SIGHUP received");
+				signal_hup = Box::pin(shutdown_signal_hup());
+			}, */
 			_ = &mut signal_int => {
 				info!("shutdown signal SIGINT received");
 				break;
@@ -132,15 +145,6 @@ async fn run(cfg: config::Config) -> Result<(), Box<dyn std::error::Error + Send
 		}
 	}
 
-	tokio::select! {
-		_ = graceful.shutdown() => {
-			info!("all connections gracefully closed");
-		},
-		_ = tokio::time::sleep(cfg.get_graceful_shutdown_timeout()) => {
-			warn!("timed out wait for all connections to close");
-		}
-	}
-
 	Ok(())
 }
 
@@ -148,11 +152,25 @@ async fn run(cfg: config::Config) -> Result<(), Box<dyn std::error::Error + Send
 pub async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 	logcfg::init_logging();
 
+	let graceful = GracefulShutdown::new();
+
 	let cfg = match load_configuration() {
 		Ok(v) => v,
 		Err(e) => panic!("{}", e)
 	};
+	let timeout = cfg.get_graceful_shutdown_timeout();
 
-	run(cfg).await
+	let rv = run(cfg, &graceful).await;
+
+	tokio::select! {
+		_ = graceful.shutdown() => {
+			info!("all connections gracefully closed");
+		},
+		_ = tokio::time::sleep(timeout) => {
+			warn!("timed out wait for all connections to close");
+		}
+	}
+
+	rv
 }
 
