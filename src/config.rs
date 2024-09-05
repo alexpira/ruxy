@@ -4,7 +4,7 @@ use std::{env,error::Error,collections::HashMap};
 use serde::Deserialize;
 use std::time::Duration;
 use std::net::{ToSocketAddrs, SocketAddr};
-use hyper::{Request,Method,Uri,header::{HeaderMap,HeaderName,HeaderValue},StatusCode};
+use hyper::{Request,Response,Method,Uri,header::{HeaderMap,HeaderName,HeaderValue},StatusCode};
 use regex::Regex;
 use log::{LevelFilter,info,warn};
 
@@ -31,31 +31,49 @@ fn parse_array(v: &toml::Value) -> Option<Vec<String>> {
 		_ => None,
 	}
 }
+
+fn add_header(data: &mut HeaderMap, key: Option<&str>, value: Option<&str>) {
+	let key = match key { Some(v) => v, None => return };
+	let value = match value { Some(v) => v, None => return };
+
+	let hn = match HeaderName::from_bytes(key.as_bytes()) {
+		Ok(v) => v,
+		Err(_) => {
+			warn!("Invalid header name: {}", key);
+			return;
+		},
+	};
+	let hv = match HeaderValue::from_bytes(value.as_bytes()) {
+		Ok(v) => v,
+		Err(_) => {
+			warn!("Invalid header value: {}", value);
+			return;
+		},
+	};
+	if let Err(e) = data.try_append(hn,hv) {
+		warn!("Failed to add header {}: {:?}", key, e);
+	}
+}
+
 fn parse_header_map(v: &toml::Value) -> Option<HeaderMap> {
 	let mut parsed = HeaderMap::new();
 
-	if let toml::Value::Table(t) = v {
-		for k in t.keys() {
-			if let Some(value) = t.get(k).and_then(|v| v.as_str()) {
-				let hn = match HeaderName::from_bytes(k.as_bytes()) {
-					Ok(v) => v,
-					Err(_) => {
-						warn!("Invalid header name: {}", k);
-						continue;
-					},
-				};
-				let hv = match HeaderValue::from_bytes(value.as_bytes()) {
-					Ok(v) => v,
-					Err(_) => {
-						warn!("Invalid header value: {}", value);
-						continue;
-					},
-				};
-				if let Err(e) = parsed.try_append(hn,hv) {
-					warn!("Failed to add header {}: {:?}", k, e);
+	match v {
+		toml::Value::Table(t) => {
+			for k in t.keys() {
+				add_header(&mut parsed, Some(k), t.get(k).and_then(|v| v.as_str()));
+			}
+		},
+		toml::Value::Array(ar) => {
+			for header in ar {
+				if let toml::Value::Table(t) = header {
+					let key = t.get("header").and_then(|v| v.as_str());
+					let value = t.get("value").and_then(|v| v.as_str());
+					add_header(&mut parsed, key, value);
 				}
 			}
-		}
+		},
+		_ => (),
 	}
 
 	if parsed.is_empty() {
@@ -244,6 +262,8 @@ pub struct ConfigAction {
 	cafile: Option<PathBuf>,
 	remove_request_headers: Option<Vec<String>>,
 	add_request_headers: Option<HeaderMap>,
+	remove_reply_headers: Option<Vec<String>>,
+	add_reply_headers: Option<HeaderMap>,
 }
 
 impl ConfigAction {
@@ -263,6 +283,8 @@ impl ConfigAction {
 				ssl_mode: t.get("ssl_mode").and_then(|v| v.as_str()).map(|v| v.to_string().into()),
 				remove_request_headers: t.get("remove_request_headers").and_then(|v| parse_array(v)),
 				add_request_headers: t.get("add_request_headers").and_then(|v| parse_header_map(v)),
+				remove_reply_headers: t.get("remove_reply_headers").and_then(|v| parse_array(v)),
+				add_reply_headers: t.get("add_reply_headers").and_then(|v| parse_header_map(v)),
 			}),
 			_ => None,
 		}
@@ -282,6 +304,8 @@ impl ConfigAction {
 		self.ssl_mode = self.ssl_mode.take().or(other.ssl_mode);
 		self.remove_request_headers = self.remove_request_headers.take().or(other.remove_request_headers.clone());
 		self.add_request_headers = self.add_request_headers.take().or(other.add_request_headers.clone());
+		self.remove_reply_headers = self.remove_reply_headers.take().or(other.remove_reply_headers.clone());
+		self.add_reply_headers = self.add_reply_headers.take().or(other.add_reply_headers.clone());
 	}
 
 	pub fn get_ssl_mode(&self) -> SslMode {
@@ -344,14 +368,38 @@ impl ConfigAction {
 		}
 
 		if let Some(hlist) = self.add_request_headers.as_ref() {
-			for (k,v) in hlist {
-				if let Err(e) = hdrs.try_append(k.clone(),v.clone()) {
-					warn!("{}Failed to add header {}: {:?}", corr_id, k, e);
+			for key in hlist.keys() {
+				for value in hlist.get_all(key) {
+					if let Err(e) = hdrs.try_append(key.clone(),value.clone()) {
+						warn!("{}Failed to add header {}: {:?}", corr_id, key, e);
+					}
 				}
 			}
 		}
 
 		Ok(req)
+	}
+
+	pub fn adapt_response(&self, mut rep: Response<GatewayBody>, corr_id: &str) -> Result<Response<GatewayBody>, ServiceError> {
+		let hdrs = rep.headers_mut();
+
+		if let Some(hlist) = self.remove_reply_headers.as_ref() {
+			for to_remove in hlist {
+				while hdrs.remove(to_remove).is_some() { }
+			}
+		}
+
+		if let Some(hlist) = self.add_reply_headers.as_ref() {
+			for key in hlist.keys() {
+				for value in hlist.get_all(key) {
+					if let Err(e) = hdrs.try_append(key.clone(),value.clone()) {
+						warn!("{}Failed to add header {}: {:?}", corr_id, key, e);
+					}
+				}
+			}
+		}
+
+		Ok(rep)
 	}
 }
 
@@ -505,6 +553,8 @@ struct RawConfig {
 	server_ssl_key: Option<String>,
 	remove_request_headers: Option<toml::Value>,
 	add_request_headers: Option<toml::Value>,
+	remove_reply_headers: Option<toml::Value>,
+	add_reply_headers: Option<toml::Value>,
 	filters: Option<toml::Table>,
 	actions: Option<toml::Table>,
 	rules: Option<toml::Table>,
@@ -533,6 +583,8 @@ impl RawConfig {
 			max_reply_log_size: None,
 			remove_request_headers: None,
 			add_request_headers: None,
+			remove_reply_headers: None,
+			add_reply_headers: None,
 			filters: None,
 			actions: None,
 			rules: None,
@@ -581,6 +633,8 @@ impl RawConfig {
 		self.server_ssl_key = self.server_ssl_key.take().or(other.server_ssl_key);
 		self.remove_request_headers = self.remove_request_headers.take().or(other.remove_request_headers);
 		self.add_request_headers = self.add_request_headers.take().or(other.add_request_headers);
+		self.remove_reply_headers = self.remove_reply_headers.take().or(other.remove_reply_headers);
+		self.add_reply_headers = self.add_reply_headers.take().or(other.add_reply_headers);
 		self.filters = self.filters.take().or(other.filters);
 		self.actions = self.actions.take().or(other.actions);
 		self.rules = self.rules.take().or(other.rules);
@@ -684,7 +738,7 @@ pub struct Config {
 }
 
 impl Config {
-	pub fn load(content: &str) -> Result<Self, Box<dyn Error>> {
+	pub fn load(content: &str) -> Result<Self, Box<dyn Error + Send + Sync>> {
 		let mut raw_cfg = RawConfig::from_env();
 		let content_cfg: RawConfig = match toml::from_str(&content) {
 			Ok(v) => v,
@@ -709,6 +763,8 @@ impl Config {
 				max_reply_log_size: raw_cfg.max_reply_log_size,
 				remove_request_headers: raw_cfg.remove_request_headers.as_ref().and_then(|v| parse_array(v)),
 				add_request_headers: raw_cfg.add_request_headers.as_ref().and_then(|v| parse_header_map(v)),
+				remove_reply_headers: raw_cfg.remove_reply_headers.as_ref().and_then(|v| parse_array(v)),
+				add_reply_headers: raw_cfg.add_reply_headers.as_ref().and_then(|v| parse_header_map(v)),
 			},
 			bind: Self::parse_bind(&raw_cfg),
 			graceful_shutdown_timeout: Self::parse_graceful_shutdown_timeout(&raw_cfg),

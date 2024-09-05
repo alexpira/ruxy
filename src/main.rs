@@ -50,10 +50,7 @@ fn load_file(file: &str) -> Result<Option<String>, Box<dyn std::error::Error + S
 
 enum ConfigSource { File, Env }
 
-#[tokio::main]
-pub async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-	logcfg::init_logging();
-
+fn load_configuration() -> Result<config::Config, Box<dyn std::error::Error + Send + Sync>> {
 	let mut cfgsrc = ConfigSource::File;
 	let mut cfgfrom = "config.toml";
 
@@ -77,11 +74,10 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 		},
 	}.unwrap_or("".to_string());
 
-	let cfg = match config::Config::load(&config) {
-		Ok(v) => v,
-		Err(e) => panic!("{}", e)
-	};
+	config::Config::load(&config)
+}
 
+async fn run(cfg: config::Config) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 	logcfg::set_log_level(cfg.get_log_level());
 	let addr = cfg.get_bind();
 	let srv_version = cfg.server_version();
@@ -146,5 +142,17 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 	}
 
 	Ok(())
+}
+
+#[tokio::main]
+pub async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+	logcfg::init_logging();
+
+	let cfg = match load_configuration() {
+		Ok(v) => v,
+		Err(e) => panic!("{}", e)
+	};
+
+	run(cfg).await
 }
 
