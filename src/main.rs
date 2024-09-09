@@ -84,14 +84,18 @@ fn load_configuration() -> Result<config::Config, Box<dyn std::error::Error + Se
 	config::Config::load(&config)
 }
 
-async fn run(cfg: config::Config, graceful: &GracefulShutdown) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+struct LoopResult {
+	restart: bool,
+}
+
+async fn run(cfg: config::Config, graceful: &GracefulShutdown) -> Result<LoopResult, Box<dyn std::error::Error + Send + Sync>> {
 	logcfg::set_log_level(cfg.get_log_level());
 	let addr = cfg.get_bind();
 	let srv_version = cfg.server_version();
 
 	let svc = GatewayService::new(cfg.clone());
 
-//	let mut signal_hup = Box::pin(shutdown_signal_hup()); // TODO: configuration hot-reload
+	let mut signal_hup = Box::pin(shutdown_signal_hup());
 	let mut signal_int = std::pin::pin!(shutdown_signal_int());
 	let mut signal_term = std::pin::pin!(shutdown_signal_term());
 
@@ -105,6 +109,8 @@ async fn run(cfg: config::Config, graceful: &GracefulShutdown) -> Result<(), Box
 			}
 		}
 	} else { None };
+
+	let mut rv = LoopResult { restart: false };
 
 	let listener = TcpListener::bind(addr).await?;
 	info!("Listening on http{}://{}", if ssl { "s" } else { "" }, addr);
@@ -129,11 +135,12 @@ async fn run(cfg: config::Config, graceful: &GracefulShutdown) -> Result<(), Box
 					srv_version.serve(io, svc.clone(), graceful);
 				}
 			},
-			// TODO: configuration hot-reload
-			/* _ = &mut signal_hup => {
+			_ = &mut signal_hup => {
 				info!("signal SIGHUP received");
-				signal_hup = Box::pin(shutdown_signal_hup());
-			}, */
+				// signal_hup = Box::pin(shutdown_signal_hup());
+				rv.restart = true;
+				break;
+			},
 			_ = &mut signal_int => {
 				info!("shutdown signal SIGINT received");
 				break;
@@ -145,7 +152,7 @@ async fn run(cfg: config::Config, graceful: &GracefulShutdown) -> Result<(), Box
 		}
 	}
 
-	Ok(())
+	Ok(rv)
 }
 
 #[tokio::main]
@@ -153,14 +160,31 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 	logcfg::init_logging();
 
 	let graceful = GracefulShutdown::new();
+	let mut timeout = Duration::from_secs(2);
+	let mut rv = Ok(());
+	let mut looping = true;
 
-	let cfg = match load_configuration() {
-		Ok(v) => v,
-		Err(e) => panic!("{}", e)
-	};
-	let timeout = cfg.get_graceful_shutdown_timeout();
+	while looping {
+		let cfg = match load_configuration() {
+			Ok(v) => v,
+			Err(e) => panic!("{}", e)
+		};
 
-	let rv = run(cfg, &graceful).await;
+		timeout = cfg.get_graceful_shutdown_timeout();
+
+		rv = match run(cfg, &graceful).await {
+			Ok(lresult) => {
+				if !lresult.restart {
+					looping = false;
+				}
+				Ok(())
+			},
+			Err(e) => {
+				looping = false;
+				Err(e)
+			}
+		}
+	}
 
 	tokio::select! {
 		_ = graceful.shutdown() => {
