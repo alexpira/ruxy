@@ -17,6 +17,7 @@ mod ssl;
 mod logcfg;
 mod net;
 mod service;
+mod lua;
 
 async fn shutdown_signal_hup() {
 	signal(SignalKind::hangup())
@@ -157,6 +158,7 @@ async fn run(cfg: config::Config, graceful: &GracefulShutdown) -> Result<LoopRes
 
 #[tokio::main]
 pub async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+	crate::lua::luatest();
 	logcfg::init_logging();
 
 	let graceful = GracefulShutdown::new();
