@@ -4,12 +4,13 @@ use hyper_util::rt::tokio::TokioIo;
 use hyper_util::server::graceful::GracefulShutdown;
 use tokio::signal::unix::{signal, SignalKind};
 use log::{info,warn,error};
-use std::{fs,path::Path,env,time::Duration};
+use std::{env,time::Duration};
 
 use net::{Stream,config_socket};
 use service::GatewayService;
 
 mod pool;
+mod filesys;
 mod random;
 mod c3po;
 mod config;
@@ -47,15 +48,6 @@ fn load_env(name: &str) -> Option<String> {
 	}
 }
 
-fn load_file(file: &str) -> Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
-	let path = Path::new(file);
-	if path.exists() {
-		Ok(Some(fs::read_to_string(Path::new(file))?))
-	} else {
-		Ok(None)
-	}
-}
-
 enum ConfigSource { File, Env }
 
 fn load_configuration() -> Result<config::Config, Box<dyn std::error::Error + Send + Sync>> {
@@ -74,7 +66,7 @@ fn load_configuration() -> Result<config::Config, Box<dyn std::error::Error + Se
 	let config = match cfgsrc {
 		ConfigSource::File => {
 			info!("Looking for configuration file {}", cfgfrom);
-			load_file(cfgfrom)?
+			filesys::load_file(cfgfrom)?
 		},
 		ConfigSource::Env => {
 			info!("Looking for configuration in environment {}", cfgfrom);
@@ -158,7 +150,6 @@ async fn run(cfg: config::Config, graceful: &GracefulShutdown) -> Result<LoopRes
 
 #[tokio::main]
 pub async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-	crate::lua::luatest();
 	logcfg::init_logging();
 
 	let graceful = GracefulShutdown::new();

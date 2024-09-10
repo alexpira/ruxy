@@ -16,6 +16,7 @@ use std::time::Duration;
 use crate::pool::{remote_pool_key,remote_pool_get,remote_pool_release};
 use crate::net::{Stream,Sender,GatewayBody,config_socket};
 use crate::config::{Config,RemoteConfig,ConfigAction,SslData};
+use crate::lua;
 
 pub struct ServiceError {
 	message: String,
@@ -164,6 +165,7 @@ impl GatewayService {
 		Self::log_request(action, &req, corr_id, "->R");
 		let modified_request = action.client_version().adapt_request(cfg, action, req, corr_id)?;
 		let modified_request = action.adapt_request(modified_request, corr_id)?;
+		let modified_request = lua::apply_request_script(&action, modified_request, corr_id)?;
 		Self::log_request(action, &modified_request, corr_id, "R->");
 		Ok(modified_request)
 	}
@@ -179,6 +181,7 @@ impl GatewayService {
 		Self::log_reply(action, &response, corr_id, "R<-");
 		let modified_response = action.client_version().adapt_response(action, response)?;
 		let modified_response = action.adapt_response(modified_response, corr_id)?;
+		let modified_response = lua::apply_response_script(&action, modified_response, corr_id)?;
 		Self::log_reply(action, &modified_response, corr_id, "<-R");
 		Ok(modified_response)
 	}
