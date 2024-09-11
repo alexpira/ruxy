@@ -8,39 +8,60 @@ use crate::net::GatewayBody;
 use crate::service::ServiceError;
 use crate::filesys::load_file;
 
-fn luatest() -> LuaResult<()> {
-	let lua = Lua::new();
-	
-	let map_table = lua.create_table()?;
-	map_table.set(1, "one")?;
-	map_table.set("two", 2)?;
-
-	lua.globals().set("map_table", map_table)?;
-
-	lua.load(load_file("lua/test.lua").unwrap().unwrap()).exec()?;
-
-	Ok(())
-}
-
-fn create_request(lua: &Lua, req: &Request<GatewayBody>) -> LuaResult<()> {
+fn request_to_lua(lua: &Lua, req: &Request<GatewayBody>) -> LuaResult<()> {
 	let request = lua.create_table()?;
 	request.set("method", req.method().as_str())?;
 
-	request.set("path", req.uri().path())?;
+	let uri = lua.create_table()?;
+	uri.set("path", req.uri().path())?;
 	if let Some(q) = req.uri().query() {
-		request.set("query", q)?;
+		uri.set("query", q)?;
 	}
 	if let Some(h) = req.uri().host() {
-		request.set("host", h)?;
+		uri.set("host", h)?;
 	}
 	if let Some(p) = req.uri().port_u16() {
-		request.set("port", p)?;
+		uri.set("port", p)?;
 	}
 	if let Some(s) = req.uri().scheme_str() {
-		request.set("scheme", s)?;
+		uri.set("scheme", s)?;
 	}
+	request.set("uri", uri)?;
+
+	let headers = lua.create_table()?;
+	let rheaders = req.headers();
+	for key in rheaders.keys() {
+		let mut values = Vec::new();
+		for v in rheaders.get_all(key) {
+			if let Ok(vs) = v.to_str() {
+				values.push(vs);
+			}
+		}
+		let sz = values.len();
+		if sz == 1 {
+			if let Some(only) = values.pop() {
+				headers.set(key.as_str(), only)?;
+			}
+		} else if sz > 1 {
+			let hlist = lua.create_table()?;
+			let mut count = 0;
+			for v in values {
+				hlist.set(count, v)?;
+				count += 1;
+			}
+			headers.set(key.as_str(), hlist)?;
+		}
+	}
+	request.set("headers", headers)?;
 
 	lua.globals().set("request", request)?;
+
+	let load_body = lua.create_function(|_, ()| -> LuaResult<()> {
+		// TODO
+		Ok(())
+	})?;
+	lua.globals().set("body", load_body)?;
+
 	Ok(())
 }
 
@@ -67,7 +88,7 @@ pub fn apply_request_script(action: &ConfigAction, req: Request<GatewayBody>, co
 		error!("{}Cannot set corr_id into globals: {:?}", corr_id, e);
 		return Ok(req);
 	}
-	if let Err(e) = create_request(&lua, &req) {
+	if let Err(e) = request_to_lua(&lua, &req) {
 		error!("{}Cannot set request into globals: {:?}", corr_id, e);
 		return Ok(req);
 	}
@@ -75,6 +96,11 @@ pub fn apply_request_script(action: &ConfigAction, req: Request<GatewayBody>, co
 		error!("{}Failed to run lua script: {:?}", corr_id, e);
 		return Ok(req);
 	}
+
+	let request: mlua::Table = lua.globals().get("request").unwrap();
+	let uri: mlua::Table = request.get("uri").unwrap();
+	let path: mlua::String = uri.get("path").unwrap();
+	println!("P: {:?}", path);
 
 	Ok(req)
 }
