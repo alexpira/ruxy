@@ -177,9 +177,9 @@ All action properties can be specified in the main section to define default rux
 - **http_client_version**: (string) either "h1" (default) or "h2"; used to define HTTP version used for backend connection
 - **log**: (boolean) set to *false* to disable basic request logging (defaults to *true*)
 - **log_headers**: (boolean) set to *true* to enable HTTP header logging; the default is *false*
-- **log_request_body**: (boolean) set to *true* to enable logging of the request payload; the default is *false*
+- **log_request_body**: (boolean) set to *true* to enable logging of the request payload; the default is *false*; if the payload cannot be succesfully converted to string, its base64 representation will be logged
 - **max_request_log_size**: (integer) limit size in bytes for the request payload to be logged; default is 256KB
-- **log_reply_body**: (boolean) set to *true* to enable logging of the response payload; the default is *false*
+- **log_reply_body**: (boolean) set to *true* to enable logging of the response payload; the default is *false*; if the payload cannot be succesfully converted to string, its base64 representation will be logged
 - **max_reply_log_size**: (integer) limit size in bytes for the response payload to be logged; default is 256KB
 - **ssl_mode**: (string) definition of SSL server trust mechanism; valid values are: "builtin" (use SSL certificates compiled at build time into the executable), "file" (loads SSL certificates from a PEM file), "os" (use os-defined SSL certificates -- not available on Android), "dangerous" (skip SSL certificate checking and trust everything)
 - **cafile**: path of the file to use if ssl\_mode is set to "file"
@@ -194,6 +194,8 @@ All action properties can be specified in the main section to define default rux
 - "R->" logs referring to the request as it is sent from ruxy to the HTTP server
 - "R<-" logs that refer to the response received from the server
 - "<-R" logs referring to the response as it is sent from ruxy to the client
+
+Also, each request is assigned an unique "correlation ID" in the form of an uuid, which is present on every log event related to that request; that is useful in high traffic scenarios when multiple requests can simultaneously produce logging.
 
 ### Notes on AI training
 
