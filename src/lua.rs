@@ -96,13 +96,16 @@ pub fn apply_request_script(action: &ConfigAction, req: Request<GatewayBody>, co
 
 	let (parts, body) = req.into_parts();
 
-	let body = load_body_bytes(body, corr_id)?;
+	std::thread::spawn(|| {
+//		load_body_bytes(body, "corr_id");
+	}).join().expect("Thread panicked");
+//	let body = load_body_bytes(body, corr_id)?;
 	// let load_body = lua.create_function(|_, ()| -> LuaResult<()> { Ok(()) }).unwrap();
-	lreq.set("body", &(*body));
+//	lreq.set("body", &(*body));
 
 	lua.globals().set("request", lreq).unwrap();
 
-	let req = Request::from_parts(parts, GatewayBody::empty());
+	let req = Request::from_parts(parts, body);
 
 	if let Err(e) = lua.load(code).exec() {
 		error!("{}Failed to run lua script: {:?}", corr_id, e);
