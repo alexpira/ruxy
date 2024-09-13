@@ -1,15 +1,17 @@
 
 use core::task::{Context,Poll};
 use async_trait::async_trait;
-use hyper::body::Frame;
-use std::pin::Pin;
-
-use base64::prelude::*;
-use hyper::body::Incoming;
 use hyper::{Request, Response};
+use hyper::body::{Bytes,Frame,Incoming};
+use http_body_util::BodyExt;
+use http::StatusCode;
+use std::pin::Pin;
+use base64::prelude::*;
 use log::{info,warn};
 use tokio::io::{AsyncRead,AsyncWrite};
 use core::marker::Unpin;
+
+use crate::service::ServiceError;
 
 #[async_trait]
 pub trait Stream : AsyncRead + AsyncWrite + Unpin + Send { }
@@ -40,10 +42,16 @@ impl Sender for hyper::client::conn::http2::SendRequest<GatewayBody> {
 	}
 }
 
+#[derive(PartialEq)]
+enum BodyKind { EMPTY, INCOMING, BYTES }
+
 pub struct GatewayBody {
+	kind: BodyKind,
 	incoming: Option<Incoming>,
-	frames: Vec<hyper::body::Bytes>,
-	save_payload: bool,
+	bytes: Option<Bytes>,
+	bytes_read: bool,
+	log_frames: Vec<Bytes>,
+	log_payload: bool,
 	log_prefix: String,
 	max_payload_size: i64,
 	current_payload_size: i64,
@@ -52,9 +60,12 @@ pub struct GatewayBody {
 impl GatewayBody {
 	pub fn empty() -> GatewayBody {
 		GatewayBody {
+			kind: BodyKind::EMPTY,
 			incoming: None,
-			frames: Vec::new(),
-			save_payload: false,
+			bytes: None,
+			bytes_read: false,
+			log_frames: Vec::new(),
+			log_payload: false,
 			log_prefix: "".to_string(),
 			max_payload_size: 0,
 			current_payload_size: 0,
@@ -63,9 +74,12 @@ impl GatewayBody {
 	}
 	pub fn wrap(inner: Incoming) -> GatewayBody {
 		GatewayBody {
+			kind: BodyKind::INCOMING,
 			incoming: Some(inner),
-			frames: Vec::new(),
-			save_payload: false,
+			bytes: None,
+			bytes_read: false,
+			log_frames: Vec::new(),
+			log_payload: false,
 			log_prefix: "".to_string(),
 			max_payload_size: 0,
 			current_payload_size: 0,
@@ -77,7 +91,7 @@ impl GatewayBody {
 		if self.transfer_started {
 			warn!("{}:{} Cannot change parameters as transfer has already started", file!(), line!());
 		} else {
-			self.save_payload = value;
+			self.log_payload = value;
 			self.log_prefix = log_prefix;
 			self.max_payload_size = max_size;
 		}
@@ -85,21 +99,21 @@ impl GatewayBody {
 
 	fn add_frame(&mut self, frame: &hyper::body::Bytes) {
 		self.transfer_started = true;
-		if self.save_payload {
+		if self.log_payload {
 			let newsz = self.current_payload_size + (frame.len() as i64);
 			if newsz > self.max_payload_size {
-				self.save_payload = false;
+				self.log_payload = false;
 				warn!("{}{}:{} Hit max payload size", self.log_prefix, file!(), line!());
 			} else {
 				self.current_payload_size = newsz;
-				self.frames.push(frame.clone());
+				self.log_frames.push(frame.clone());
 			}
 		}
 	}
 
 	fn end(&self) {
-		if self.save_payload {
-			let bdata = self.frames.clone().concat();
+		if self.log_payload {
+			let bdata = self.log_frames.clone().concat();
 			let log = String::from_utf8(bdata).unwrap_or_else(|v| {
 				format!("DECODE-ERROR at {}, B64={}", v.utf8_error().valid_up_to(), BASE64_STANDARD.encode(v.as_bytes()))
 			});
@@ -107,6 +121,28 @@ impl GatewayBody {
 				info!("{}EMPTY BODY", self.log_prefix);
 			} else {
 				info!("{}BODY: {}", self.log_prefix, log);
+			}
+		}
+	}
+
+	pub async fn load_bytes(&mut self, corr_id: &str) -> Result<Bytes,ServiceError> {
+		match self.kind {
+			BodyKind::EMPTY => Ok(Bytes::from_static(&[])),
+			BodyKind::BYTES => Ok(self.bytes.clone().unwrap_or(Bytes::from_static(&[]))),
+			BodyKind::INCOMING => match self.incoming.take() {
+				None => Ok(Bytes::from_static(&[])),
+				Some(incoming) => {
+					let coll = match incoming.collect().await {
+						Ok(v) => v,
+						Err(e) => {
+							return Err(ServiceError::remap(format!("{}Failed to load body", corr_id), StatusCode::BAD_REQUEST, e));
+						},
+					};
+					let bytes = coll.to_bytes();
+					self.bytes = Some(bytes.clone());
+					self.kind = BodyKind::BYTES;
+					Ok(bytes)
+				}
 			}
 		}
 	}
@@ -118,6 +154,18 @@ impl hyper::body::Body for GatewayBody {
 
 	fn poll_frame(mut self: Pin<&mut Self>, cx: &mut Context<'_>,) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
 		let me = &mut *self.as_mut().get_mut();
+
+		if me.kind == BodyKind::BYTES {
+			if me.bytes_read {
+				return Poll::Ready(None);
+			} else if me.bytes.is_none() {
+				return Poll::Ready(None);
+			} else {
+				let frame = Frame::data(me.bytes.clone().unwrap());
+				me.bytes_read = true;
+				return Poll::Ready(Some(Ok(frame)));
+			}
+		}
 
 		let poll = match me.incoming.as_mut() {
 			None => {
@@ -146,6 +194,10 @@ impl hyper::body::Body for GatewayBody {
 	}
 
 	fn is_end_stream(&self) -> bool {
+		if self.kind == BodyKind::BYTES {
+			return self.bytes_read;
+		}
+	
 		let rv = match &self.incoming {
 			None => true,
 			Some(wrp) => wrp.is_end_stream(),
