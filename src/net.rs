@@ -1,10 +1,9 @@
 
 use core::task::{Context,Poll};
 use async_trait::async_trait;
-use hyper::{Request, Response};
-use hyper::body::{Bytes,Frame,Incoming};
+use hyper::{Request,Response,StatusCode};
+use hyper::body::{Buf,Bytes,Frame,Incoming};
 use http_body_util::BodyExt;
-use http::StatusCode;
 use std::pin::Pin;
 use base64::prelude::*;
 use log::{info,warn};
@@ -42,49 +41,44 @@ impl Sender for hyper::client::conn::http2::SendRequest<GatewayBody> {
 	}
 }
 
-#[derive(PartialEq)]
-enum BodyKind { EMPTY, INCOMING, BYTES }
+enum BodyKind {
+	EMPTY,
+	INCOMING(Incoming),
+	BYTES(Bytes),
+}
 
 pub struct GatewayBody {
-	kind: BodyKind,
-	incoming: Option<Incoming>,
-	bytes: Option<Bytes>,
-	bytes_read: bool,
-	log_frames: Vec<Bytes>,
+	inner: BodyKind,
+
 	log_payload: bool,
 	log_prefix: String,
+	log_frames: Vec<Bytes>,
 	max_payload_size: i64,
 	current_payload_size: i64,
+
 	transfer_started: bool,
 }
 impl GatewayBody {
-	pub fn empty() -> GatewayBody {
+	fn init(inner: BodyKind) -> GatewayBody {
 		GatewayBody {
-			kind: BodyKind::EMPTY,
-			incoming: None,
-			bytes: None,
-			bytes_read: false,
-			log_frames: Vec::new(),
+			inner: inner,
 			log_payload: false,
 			log_prefix: "".to_string(),
+			log_frames: Vec::new(),
 			max_payload_size: 0,
 			current_payload_size: 0,
 			transfer_started: false,
 		}
 	}
+
+	pub fn empty() -> GatewayBody {
+		Self::init(BodyKind::EMPTY)
+	}
 	pub fn wrap(inner: Incoming) -> GatewayBody {
-		GatewayBody {
-			kind: BodyKind::INCOMING,
-			incoming: Some(inner),
-			bytes: None,
-			bytes_read: false,
-			log_frames: Vec::new(),
-			log_payload: false,
-			log_prefix: "".to_string(),
-			max_payload_size: 0,
-			current_payload_size: 0,
-			transfer_started: false,
-		}
+		Self::init(BodyKind::INCOMING(inner))
+	}
+	pub fn data(inner: Bytes) -> GatewayBody {
+		Self::init(BodyKind::BYTES(inner))
 	}
 
 	pub fn log_payload(&mut self, value: bool, max_size: i64, log_prefix: String) {
@@ -125,24 +119,18 @@ impl GatewayBody {
 		}
 	}
 
-	pub async fn load_bytes(&mut self, corr_id: &str) -> Result<Bytes,ServiceError> {
-		match self.kind {
+	pub async fn into_bytes(self, corr_id: &str) -> Result<Bytes,ServiceError> {
+		match self.inner {
 			BodyKind::EMPTY => Ok(Bytes::from_static(&[])),
-			BodyKind::BYTES => Ok(self.bytes.clone().unwrap_or(Bytes::from_static(&[]))),
-			BodyKind::INCOMING => match self.incoming.take() {
-				None => Ok(Bytes::from_static(&[])),
-				Some(incoming) => {
-					let coll = match incoming.collect().await {
-						Ok(v) => v,
-						Err(e) => {
-							return Err(ServiceError::remap(format!("{}Failed to load body", corr_id), StatusCode::BAD_REQUEST, e));
-						},
-					};
-					let bytes = coll.to_bytes();
-					self.bytes = Some(bytes.clone());
-					self.kind = BodyKind::BYTES;
-					Ok(bytes)
-				}
+			BodyKind::BYTES(buf) => Ok(buf),
+			BodyKind::INCOMING(incoming) => {
+				let coll = match incoming.collect().await {
+					Ok(v) => v,
+					Err(e) => {
+						return Err(ServiceError::remap(format!("{}Failed to load body", corr_id), StatusCode::BAD_REQUEST, e));
+					},
+				};
+				Ok(coll.to_bytes())
 			}
 		}
 	}
@@ -155,6 +143,44 @@ impl hyper::body::Body for GatewayBody {
 	fn poll_frame(mut self: Pin<&mut Self>, cx: &mut Context<'_>,) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
 		let me = &mut *self.as_mut().get_mut();
 
+		match &mut me.inner {
+			BodyKind::EMPTY => {
+				me.end();
+				Poll::Ready(None)
+			},
+			BodyKind::BYTES(buf) => {
+				let remind = buf.remaining();
+				if remind > 0 {
+					let data = buf.copy_to_bytes(usize::min(remind, 4096));
+					me.add_frame(&data);
+					let frame = Frame::data(data);
+					Poll::Ready(Some(Ok(frame)))
+				} else {
+					me.end();
+					Poll::Ready(None)
+				}
+			},
+			BodyKind::INCOMING(incoming) => {
+				let poll = Pin::new(incoming).poll_frame(cx);
+				let vopt = core::task::ready!(poll);
+
+				if vopt.is_none() {
+					me.end();
+					return Poll::Ready(None);
+				}
+				match vopt.unwrap() {
+					Err(e) => Poll::Ready(Some(Err(e))),
+					Ok(frm) => {
+						if let Some(data) = frm.data_ref() {
+							me.add_frame(data);
+						}
+						Poll::Ready(Some(Ok(frm)))
+					},
+				}
+			},
+		}
+
+/*
 		if me.kind == BodyKind::BYTES {
 			if me.bytes_read {
 				return Poll::Ready(None);
@@ -191,9 +217,16 @@ impl hyper::body::Body for GatewayBody {
 				Poll::Ready(Some(Ok(frm)))
 			},
 		}
+*/
 	}
 
 	fn is_end_stream(&self) -> bool {
+		match &self.inner {
+			BodyKind::EMPTY => true,
+			BodyKind::BYTES(buf) => !buf.has_remaining(),
+			BodyKind::INCOMING(inc) => inc.is_end_stream(),
+		}
+/*
 		if self.kind == BodyKind::BYTES {
 			return self.bytes_read;
 		}
@@ -206,6 +239,7 @@ impl hyper::body::Body for GatewayBody {
 			self.end();
 		}
 		rv
+*/
 	}
 }
 

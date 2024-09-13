@@ -1,6 +1,6 @@
 
 use mlua::prelude::*;
-use hyper::{Request,Response,body::Bytes};
+use hyper::{Request,Response};
 use log::{warn,error};
 
 use crate::config::ConfigAction;
@@ -8,34 +8,28 @@ use crate::net::GatewayBody;
 use crate::service::ServiceError;
 use crate::filesys::load_file;
 
-#[tokio::main]
-async fn load_body_bytes(mut body: GatewayBody, corr_id: &str) -> Result<Bytes,ServiceError> {
-	body.load_bytes(corr_id).await
-}
-
-
-fn request_to_lua<'a>(lua: &'a Lua, req: &Request<GatewayBody>) -> LuaResult<mlua::Table<'a>> {
+fn request_to_lua<'a>(lua: &'a Lua, req: &http::request::Parts) -> LuaResult<mlua::Table<'a>> {
 	let request = lua.create_table()?;
-	request.set("method", req.method().as_str())?;
+	request.set("method", req.method.as_str())?;
 
 	let uri = lua.create_table()?;
-	uri.set("path", req.uri().path())?;
-	if let Some(q) = req.uri().query() {
+	uri.set("path", req.uri.path())?;
+	if let Some(q) = req.uri.query() {
 		uri.set("query", q)?;
 	}
-	if let Some(h) = req.uri().host() {
+	if let Some(h) = req.uri.host() {
 		uri.set("host", h)?;
 	}
-	if let Some(p) = req.uri().port_u16() {
+	if let Some(p) = req.uri.port_u16() {
 		uri.set("port", p)?;
 	}
-	if let Some(s) = req.uri().scheme_str() {
+	if let Some(s) = req.uri.scheme_str() {
 		uri.set("scheme", s)?;
 	}
 	request.set("uri", uri)?;
 
 	let headers = lua.create_table()?;
-	let rheaders = req.headers();
+	let rheaders = &req.headers;
 	for key in rheaders.keys() {
 		let mut values = Vec::new();
 		for v in rheaders.get_all(key) {
@@ -63,7 +57,7 @@ fn request_to_lua<'a>(lua: &'a Lua, req: &Request<GatewayBody>) -> LuaResult<mlu
 	Ok(request)
 }
 
-pub fn apply_request_script(action: &ConfigAction, req: Request<GatewayBody>, corr_id: &str) -> Result<Request<GatewayBody>, ServiceError> {
+pub async fn apply_request_script(action: &ConfigAction, req: Request<GatewayBody>, corr_id: &str) -> Result<Request<GatewayBody>, ServiceError> {
 	let script = "./lua/test.lua"; // TODO: load from action
 
 	let code = match load_file(script) {
@@ -80,35 +74,33 @@ pub fn apply_request_script(action: &ConfigAction, req: Request<GatewayBody>, co
 		}
 	};
 
+	let (parts, body) = req.into_parts();
+	let bdata = body.into_bytes(corr_id).await?;
+
 	let lua = Lua::new();
 
 	if let Err(e) = lua.globals().set("corr_id", corr_id) {
 		error!("{}Cannot set corr_id into globals: {:?}", corr_id, e);
+		let req = Request::from_parts(parts, GatewayBody::data(bdata));
 		return Ok(req);
 	}
-	let lreq = match request_to_lua(&lua, &req) {
+	let lreq = match request_to_lua(&lua, &parts) {
 		Ok(v) => v,
 		Err(e) => {
 			error!("{}Cannot set request into globals: {:?}", corr_id, e);
+			let req = Request::from_parts(parts, GatewayBody::data(bdata));
 			return Ok(req);
 		},
 	};
 
-	let (parts, body) = req.into_parts();
+	let luabody = bdata.clone();
+	lreq.set("body", &(*luabody)).expect("Failed to set body");
 
-	std::thread::spawn(|| {
-//		load_body_bytes(body, "corr_id");
-	}).join().expect("Thread panicked");
-//	let body = load_body_bytes(body, corr_id)?;
-	// let load_body = lua.create_function(|_, ()| -> LuaResult<()> { Ok(()) }).unwrap();
-//	lreq.set("body", &(*body));
-
-	lua.globals().set("request", lreq).unwrap();
-
-	let req = Request::from_parts(parts, body);
+	lua.globals().set("request", lreq).expect("Failed to set request");
 
 	if let Err(e) = lua.load(code).exec() {
 		error!("{}Failed to run lua script: {:?}", corr_id, e);
+		let req = Request::from_parts(parts, GatewayBody::data(bdata));
 		return Ok(req);
 	}
 
@@ -117,6 +109,7 @@ pub fn apply_request_script(action: &ConfigAction, req: Request<GatewayBody>, co
 	let path: mlua::String = uri.get("path").unwrap();
 	println!("P: {:?}", path);
 
+	let req = Request::from_parts(parts, GatewayBody::data(bdata));
 	Ok(req)
 }
 

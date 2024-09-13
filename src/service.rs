@@ -154,7 +154,7 @@ impl GatewayService {
 		}
 	}
 
-	fn mangle_request(cfg: &Config, action: &ConfigAction, req: Request<Incoming>, corr_id: &str) -> Result<Request<GatewayBody>, ServiceError> {
+	async fn mangle_request(cfg: &Config, action: &ConfigAction, req: Request<Incoming>, corr_id: &str) -> Result<Request<GatewayBody>, ServiceError> {
 		let req = req.map(|v| {
 			let mut body = GatewayBody::wrap(v);
 			if action.log_request_body() {
@@ -165,7 +165,7 @@ impl GatewayService {
 		Self::log_request(action, &req, corr_id, "->R");
 		let modified_request = action.client_version().adapt_request(cfg, action, req, corr_id)?;
 		let modified_request = action.adapt_request(modified_request, corr_id)?;
-		let modified_request = lua::apply_request_script(&action, modified_request, corr_id)?;
+		let modified_request = lua::apply_request_script(&action, modified_request, corr_id).await?;
 		Self::log_request(action, &modified_request, corr_id, "R->");
 		Ok(modified_request)
 	}
@@ -218,7 +218,7 @@ impl GatewayService {
 	}
 
 	async fn forward(cfg: &Config, action: &ConfigAction, req: Request<Incoming>, corr_id: &str) -> Result<Response<Incoming>, ServiceError> {
-		let remote_request = Self::mangle_request(cfg, action, req, corr_id)?;
+		let remote_request = Self::mangle_request(cfg, action, req, corr_id).await?;
 		let mut sender = Self::get_sender(cfg, action).await?;
 		let rv = errmg!(sender.value.send(remote_request).await);
 
