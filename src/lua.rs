@@ -1,6 +1,6 @@
 
 use mlua::prelude::*;
-use hyper::{Request,Response};
+use hyper::{Request,Response,body::Bytes};
 use log::{warn,error};
 
 use crate::config::ConfigAction;
@@ -8,7 +8,13 @@ use crate::net::GatewayBody;
 use crate::service::ServiceError;
 use crate::filesys::load_file;
 
-fn request_to_lua(lua: &Lua, req: &Request<GatewayBody>) -> LuaResult<()> {
+#[tokio::main]
+async fn load_body_bytes(mut body: GatewayBody, corr_id: &str) -> Result<Bytes,ServiceError> {
+	body.load_bytes(corr_id).await
+}
+
+
+fn request_to_lua<'a>(lua: &'a Lua, req: &Request<GatewayBody>) -> LuaResult<mlua::Table<'a>> {
 	let request = lua.create_table()?;
 	request.set("method", req.method().as_str())?;
 
@@ -54,15 +60,7 @@ fn request_to_lua(lua: &Lua, req: &Request<GatewayBody>) -> LuaResult<()> {
 	}
 	request.set("headers", headers)?;
 
-	lua.globals().set("request", request)?;
-
-	let load_body = lua.create_function(|_, ()| -> LuaResult<()> {
-		// TODO
-		Ok(())
-	})?;
-	lua.globals().set("body", load_body)?;
-
-	Ok(())
+	Ok(request)
 }
 
 pub fn apply_request_script(action: &ConfigAction, req: Request<GatewayBody>, corr_id: &str) -> Result<Request<GatewayBody>, ServiceError> {
@@ -88,10 +86,24 @@ pub fn apply_request_script(action: &ConfigAction, req: Request<GatewayBody>, co
 		error!("{}Cannot set corr_id into globals: {:?}", corr_id, e);
 		return Ok(req);
 	}
-	if let Err(e) = request_to_lua(&lua, &req) {
-		error!("{}Cannot set request into globals: {:?}", corr_id, e);
-		return Ok(req);
-	}
+	let lreq = match request_to_lua(&lua, &req) {
+		Ok(v) => v,
+		Err(e) => {
+			error!("{}Cannot set request into globals: {:?}", corr_id, e);
+			return Ok(req);
+		},
+	};
+
+	let (parts, body) = req.into_parts();
+
+	let body = load_body_bytes(body, corr_id)?;
+	// let load_body = lua.create_function(|_, ()| -> LuaResult<()> { Ok(()) }).unwrap();
+//	lreq.set("body", body);
+
+	lua.globals().set("request", lreq).unwrap();
+
+	let req = Request::from_parts(parts, GatewayBody::empty());
+
 	if let Err(e) = lua.load(code).exec() {
 		error!("{}Failed to run lua script: {:?}", corr_id, e);
 		return Ok(req);
