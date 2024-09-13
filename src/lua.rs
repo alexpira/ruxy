@@ -98,7 +98,7 @@ pub fn apply_request_script(action: &ConfigAction, req: Request<GatewayBody>, co
 
 	let body = load_body_bytes(body, corr_id)?;
 	// let load_body = lua.create_function(|_, ()| -> LuaResult<()> { Ok(()) }).unwrap();
-//	lreq.set("body", body);
+	lreq.set("body", &(*body));
 
 	lua.globals().set("request", lreq).unwrap();
 
