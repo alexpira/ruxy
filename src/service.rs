@@ -12,6 +12,7 @@ use std::fmt::Debug;
 use hyper_util::rt::tokio::TokioIo;
 use log::{debug,info,warn,error};
 use std::time::Duration;
+use std::net::SocketAddr;
 
 use crate::pool::{remote_pool_key,remote_pool_get,remote_pool_release};
 use crate::net::{Stream,Sender,GatewayBody,config_socket};
@@ -87,6 +88,7 @@ struct CachedSender {
 pub struct GatewayService {
 	cfg: Arc<Mutex<Config>>,
 	original_cfg: Config,
+	client: Option<SocketAddr>,
 }
 
 impl GatewayService {
@@ -94,6 +96,17 @@ impl GatewayService {
 		Self {
 			cfg: Arc::new(Mutex::new(cfg.clone())),
 			original_cfg: cfg,
+			client: None,
+		}
+	}
+
+	pub fn set_client(&mut self, value: SocketAddr) {
+		self.client = Some(value);
+	}
+	fn get_client(&self) -> String {
+		match self.client {
+			Some(v) => v.to_string(),
+			None => "N/A".to_string(),
 		}
 	}
 
@@ -119,17 +132,17 @@ impl GatewayService {
 		}
 	}
 
-	fn log_headers(hdrs: &HeaderMap, corr_id: &str, step: &str) {
+	fn log_headers(hdrs: &HeaderMap, client_addr: &str, corr_id: &str, step: &str) {
 		for (key, value) in hdrs.iter() {
-			info!("{}{} {:?}: {:?}", corr_id, step, key, value);
+			info!("{}{} {} {:?}: {:?}", corr_id, client_addr, step, key, value);
 		}
 	}
 
-	fn log_request(action: &ConfigAction, req: &Request<GatewayBody>, corr_id: &str, step: &str) {
+	fn log_request(action: &ConfigAction, req: &Request<GatewayBody>, client_addr: &str, corr_id: &str, step: &str) {
 		if action.log() {
 			let uri = req.uri().clone();
-			info!("{}{} {:?} {} {} {} {} {}",
-				corr_id, step,
+			info!("{}{} {} {:?} {} {} {} {} {}",
+				corr_id, client_addr, step,
 				req.version(),
 				req.method(),
 				uri.scheme().map(|v| v.as_str()).unwrap_or("-"),
@@ -139,22 +152,22 @@ impl GatewayService {
 		}
 
 		if action.log_headers() {
-			Self::log_headers(req.headers(), corr_id, step);
+			Self::log_headers(req.headers(), client_addr, corr_id, step);
 		}
 
 	}
 
-	fn log_reply(action: &ConfigAction, rep: &Response<GatewayBody>, corr_id: &str, step: &str) {
+	fn log_reply(action: &ConfigAction, rep: &Response<GatewayBody>, client_addr: &str, corr_id: &str, step: &str) {
 		if action.log() {
-			info!("{}{} {:?} {:?}", corr_id, step, rep.version(), rep.status());
+			info!("{}{} {} {:?} {:?}", corr_id, client_addr, step, rep.version(), rep.status());
 		}
 
 		if action.log_headers() {
-			Self::log_headers(rep.headers(), corr_id, step);
+			Self::log_headers(rep.headers(), client_addr, corr_id, step);
 		}
 	}
 
-	async fn mangle_request(cfg: &Config, action: &ConfigAction, req: Request<Incoming>, corr_id: &str) -> Result<Request<GatewayBody>, ServiceError> {
+	async fn mangle_request(cfg: &Config, action: &ConfigAction, req: Request<Incoming>, client_addr: &str, corr_id: &str) -> Result<Request<GatewayBody>, ServiceError> {
 		let req = req.map(|v| {
 			let mut body = GatewayBody::wrap(v);
 			if action.log_request_body() {
@@ -162,15 +175,15 @@ impl GatewayService {
 			}
 			body
 		});
-		Self::log_request(action, &req, corr_id, "->R");
+		Self::log_request(action, &req, client_addr, corr_id, "->R");
 		let modified_request = action.client_version().adapt_request(cfg, action, req, corr_id)?;
 		let modified_request = action.adapt_request(modified_request, corr_id)?;
 		let modified_request = lua::apply_request_script(&action, modified_request, corr_id).await?;
-		Self::log_request(action, &modified_request, corr_id, "R->");
+		Self::log_request(action, &modified_request, client_addr, corr_id, "R->");
 		Ok(modified_request)
 	}
 
-	fn mangle_reply(action: &ConfigAction, remote_resp: Response<Incoming>, corr_id: &str) -> Result<Response<GatewayBody>, ServiceError> {
+	fn mangle_reply(action: &ConfigAction, remote_resp: Response<Incoming>, client_addr: &str, corr_id: &str) -> Result<Response<GatewayBody>, ServiceError> {
 		let response = remote_resp.map(|v| {
 			let mut body = GatewayBody::wrap(v);
 			if action.log_reply_body() {
@@ -178,11 +191,11 @@ impl GatewayService {
 			}
 			body
 		});
-		Self::log_reply(action, &response, corr_id, "R<-");
+		Self::log_reply(action, &response, client_addr, corr_id, "R<-");
 		let modified_response = action.client_version().adapt_response(action, response)?;
 		let modified_response = action.adapt_response(modified_response, corr_id)?;
 		let modified_response = lua::apply_response_script(&action, modified_response, corr_id)?;
-		Self::log_reply(action, &modified_response, corr_id, "<-R");
+		Self::log_reply(action, &modified_response, client_addr, corr_id, "<-R");
 		Ok(modified_response)
 	}
 
@@ -217,8 +230,8 @@ impl GatewayService {
 		})
 	}
 
-	async fn forward(cfg: &Config, action: &ConfigAction, req: Request<Incoming>, corr_id: &str) -> Result<Response<Incoming>, ServiceError> {
-		let remote_request = Self::mangle_request(cfg, action, req, corr_id).await?;
+	async fn forward(cfg: &Config, action: &ConfigAction, req: Request<Incoming>, client_addr: &str, corr_id: &str) -> Result<Response<Incoming>, ServiceError> {
+		let remote_request = Self::mangle_request(cfg, action, req, client_addr, corr_id).await?;
 		let mut sender = Self::get_sender(cfg, action).await?;
 		let rv = errmg!(sender.value.send(remote_request).await);
 
@@ -237,6 +250,7 @@ impl Service<Request<Incoming>> for GatewayService {
 		let method = req.method().clone();
 		let headers = req.headers().clone();
 		let cfg_local = self.cfg.clone();
+		let client_addr = self.get_client();
 
 		let mut cfg = (*cfg_local.lock().unwrap_or_else(|mut e| {
 			**e.get_mut() = self.original_cfg.clone();
@@ -256,14 +270,14 @@ impl Service<Request<Incoming>> for GatewayService {
 				}
 			}
 
-			Self::forward(&cfg, &action, req, &corr_id)
+			Self::forward(&cfg, &action, req, &client_addr, &corr_id)
 				.await
 				.and_then(|remote_resp| {
 					if let Ok(mut locked) = cfg_local.lock() {
 						let status = remote_resp.status();
 						locked.notify_reply(rules, &status);
 					}
-					Self::mangle_reply(&action, remote_resp, &corr_id)
+					Self::mangle_reply(&action, remote_resp, &client_addr, &corr_id)
 				}).or_else(|e| {
 					error!("Call forward failed: {:?}", e.message);
 					Response::builder()
