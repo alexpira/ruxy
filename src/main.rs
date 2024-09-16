@@ -117,7 +117,7 @@ async fn run(cfg: config::Config, graceful: &GracefulShutdown) -> Result<LoopRes
 
 	loop {
 		tokio::select! {
-			Ok((tcp, _addr)) = listener.accept() => {
+			Ok((tcp, remote_addr)) = listener.accept() => {
 				config_socket!(tcp);
 				let tcp: Option<Box<dyn Stream>> = if let Some(acc) = acceptor.clone() {
 					match ssl::wrap_server(tcp, acc.clone()).await {
@@ -132,7 +132,9 @@ async fn run(cfg: config::Config, graceful: &GracefulShutdown) -> Result<LoopRes
 				};
 				if let Some(tcp) = tcp {
 					let io = TokioIo::new(tcp);
-					srv_version.serve(io, svc.clone(), graceful);
+					let mut dedicated_svc = svc.clone();
+					dedicated_svc.set_client(remote_addr);
+					srv_version.serve(io, dedicated_svc, graceful);
 				}
 			},
 			_ = &mut signal_hup => {
