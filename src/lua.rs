@@ -57,6 +57,24 @@ fn request_to_lua<'a>(lua: &'a Lua, req: &http::request::Parts) -> LuaResult<mlu
 	Ok(request)
 }
 
+macro_rules! werr {
+	( $data: expr ) => { match $data {
+		Ok(v) => v,
+		Err(e) => {
+			return Err(ServiceError::remap("Failed to convert request from lua".to_string(), hyper::StatusCode::BAD_GATEWAY, e));
+		}
+	} }
+}
+
+fn request_from_lua(lua: &mlua::Lua, request: &mlua::Table) -> Result<http::request::Parts, ServiceError> {
+	let method: String = werr!(request.get("method"));
+	let method = werr!(hyper::Method::from_bytes(method.as_bytes()));
+
+	let uri: mlua::Table = werr!(request.get("uri"));
+
+	Err(ServiceError::from("NO".to_string()))
+}
+
 pub async fn apply_request_script(action: &ConfigAction, req: Request<GatewayBody>, corr_id: &str) -> Result<Request<GatewayBody>, ServiceError> {
 	let script = "./lua/test.lua"; // TODO: load from action
 
@@ -108,6 +126,8 @@ pub async fn apply_request_script(action: &ConfigAction, req: Request<GatewayBod
 	let uri: mlua::Table = request.get("uri").unwrap();
 	let path: mlua::String = uri.get("path").unwrap();
 	println!("P: {:?}", path);
+
+	request_from_lua(&lua, &request);
 
 	let req = Request::from_parts(parts, GatewayBody::data(bdata));
 	Ok(req)
