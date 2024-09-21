@@ -2,6 +2,7 @@
 use mlua::prelude::*;
 use hyper::{Request,Response};
 use log::{warn,error};
+use std::str::FromStr;
 
 use crate::config::ConfigAction;
 use crate::net::GatewayBody;
@@ -66,13 +67,54 @@ macro_rules! werr {
 	} }
 }
 
-fn request_from_lua(lua: &mlua::Lua, request: &mlua::Table) -> Result<http::request::Parts, ServiceError> {
+fn request_from_lua(lua: &mlua::Lua, mut parts: http::request::Parts) -> Result<(http::request::Parts, Box<[u8]>), ServiceError> {
+	let request: mlua::Table = werr!(lua.globals().get("request"));
+
 	let method: String = werr!(request.get("method"));
 	let method = werr!(hyper::Method::from_bytes(method.as_bytes()));
 
 	let uri: mlua::Table = werr!(request.get("uri"));
+	let scheme: mlua::Value = werr!(uri.get("scheme"));
+	let host: mlua::Value = werr!(uri.get("host"));
+	let port: mlua::Value = werr!(uri.get("port"));
+	let path: mlua::Value = werr!(uri.get("path"));
+	let query: mlua::Value = werr!(uri.get("query"));
 
-	Err(ServiceError::from("NO".to_string()))
+	let mut uri_parts = http::uri::Parts::default();
+
+	uri_parts.scheme = scheme.as_str()
+		.and_then(|v| http::uri::Scheme::from_str(v).ok())
+		.or(parts.uri.scheme().cloned());
+
+	uri_parts.authority = if let Some(hstr) = host.as_str() {
+		let fullstr = if let Some(pvalue) = port.as_u32() {
+			format!("{}:{}", hstr, pvalue)
+		} else {
+			hstr.to_string()
+		};
+		Some(werr!(http::uri::Authority::from_str(&fullstr)))
+	} else {
+		parts.uri.authority().cloned()
+	};
+
+	uri_parts.path_and_query = if let Some(pstr) = path.as_str() {
+		let fullstr = if let Some(qvalue) = query.as_str() {
+			format!("{}:{}", pstr, qvalue)
+		} else {
+			pstr.to_string()
+		};
+		Some(werr!(http::uri::PathAndQuery::from_str(&fullstr)))
+	} else {
+		parts.uri.path_and_query().cloned()
+	};
+
+	let uri = werr!(http::Uri::from_parts(uri_parts));
+
+	let body: Box<[u8]> = werr!(request.get("body"));
+
+	parts.method = method;
+	parts.uri = uri;
+	Ok((parts, body))
 }
 
 pub async fn apply_request_script(action: &ConfigAction, req: Request<GatewayBody>, corr_id: &str) -> Result<Request<GatewayBody>, ServiceError> {
@@ -122,14 +164,9 @@ pub async fn apply_request_script(action: &ConfigAction, req: Request<GatewayBod
 		return Ok(req);
 	}
 
-	let request: mlua::Table = lua.globals().get("request").unwrap();
-	let uri: mlua::Table = request.get("uri").unwrap();
-	let path: mlua::String = uri.get("path").unwrap();
-	println!("P: {:?}", path);
+	let (parts,body) = request_from_lua(&lua, parts)?;
 
-	request_from_lua(&lua, &request);
-
-	let req = Request::from_parts(parts, GatewayBody::data(bdata));
+	let req = Request::from_parts(parts, GatewayBody::data(body.into()));
 	Ok(req)
 }
 
