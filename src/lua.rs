@@ -1,6 +1,6 @@
 
 use mlua::prelude::*;
-use hyper::{Request,Response};
+use hyper::{Request,Response,header::{HeaderMap,HeaderName,HeaderValue}};
 use log::{warn,error};
 use std::str::FromStr;
 
@@ -67,11 +67,31 @@ macro_rules! werr {
 	} }
 }
 
-fn request_from_lua(lua: &mlua::Lua, mut parts: http::request::Parts) -> Result<(http::request::Parts, Box<[u8]>), ServiceError> {
+fn append_header(headers: &mut HeaderMap, key: String, value: mlua::String, corr_id: &str) -> mlua::Result<()> {
+	let hk = match HeaderName::from_bytes(&key.clone().into_bytes()) {
+		Ok(v) => v,
+		Err(e) => {
+			error!("{}Cannot convert lua header name '{}': {:?}", corr_id, key, e);
+			return Err(mlua::Error::RuntimeError(format!("Cannot convert lua header name '{}': {:?}", key, e)));
+		}
+	};
+	let hv = match HeaderValue::from_bytes(&value.as_bytes()) {
+		Ok(v) => v,
+		Err(e) => {
+			error!("{}Cannot convert lua header value for '{}': {:?}", corr_id, key, e);
+			return Err(mlua::Error::RuntimeError(format!("Cannot convert lua header value for '{}': {:?}", key, e)));
+		}
+	};
+
+	headers.append(hk, hv);
+	Ok(())
+}
+
+fn request_from_lua(lua: &mlua::Lua, mut parts: http::request::Parts, corr_id: &str) -> Result<(http::request::Parts, Box<[u8]>), ServiceError> {
 	let request: mlua::Table = werr!(lua.globals().get("request"));
 
 	let method: String = werr!(request.get("method"));
-	let method = werr!(hyper::Method::from_bytes(method.as_bytes()));
+	let method = werr!(http::Method::from_bytes(method.as_bytes()));
 
 	let uri: mlua::Table = werr!(request.get("uri"));
 	let scheme: mlua::Value = werr!(uri.get("scheme"));
@@ -99,7 +119,11 @@ fn request_from_lua(lua: &mlua::Lua, mut parts: http::request::Parts) -> Result<
 
 	uri_parts.path_and_query = if let Some(pstr) = path.as_str() {
 		let fullstr = if let Some(qvalue) = query.as_str() {
-			format!("{}:{}", pstr, qvalue)
+			if qvalue.is_empty() {
+				pstr.to_string()
+			} else {
+				format!("{}?{}", pstr, qvalue)
+			}
 		} else {
 			pstr.to_string()
 		};
@@ -110,10 +134,31 @@ fn request_from_lua(lua: &mlua::Lua, mut parts: http::request::Parts) -> Result<
 
 	let uri = werr!(http::Uri::from_parts(uri_parts));
 
+	let mut headers = HeaderMap::new();
+	if let Some(lhdrs) = werr!(request.get::<&str, mlua::Value>("headers")).as_table() {
+		werr!(lhdrs.for_each(|k: String, v: mlua::Value| {
+			match v {
+				mlua::Value::String(st) => append_header(&mut headers, k, st, corr_id),
+				mlua::Value::Table(values) => {
+					values.for_each(|_: mlua::Value, v: mlua::Value| {
+						if let mlua::Value::String(st) = v {
+							append_header(&mut headers, k.clone(), st, corr_id)
+						} else {
+							Ok(())
+						}
+					})
+				},
+				_ => Ok(()),
+			}
+		}));
+	}
+
 	let body: Box<[u8]> = werr!(request.get("body"));
 
 	parts.method = method;
 	parts.uri = uri;
+	parts.headers = headers;
+
 	Ok((parts, body))
 }
 
@@ -164,7 +209,7 @@ pub async fn apply_request_script(action: &ConfigAction, req: Request<GatewayBod
 		return Ok(req);
 	}
 
-	let (parts,body) = request_from_lua(&lua, parts)?;
+	let (parts,body) = request_from_lua(&lua, parts, corr_id)?;
 
 	let req = Request::from_parts(parts, GatewayBody::data(body.into()));
 	Ok(req)

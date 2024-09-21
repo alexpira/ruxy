@@ -16,6 +16,9 @@ function dump(o)
 end
 
 print("Inside LUA script " .. corr_id);
-print(dump(request));
 request.uri.path = 'hello'
+request.uri.query = ''
+request.method = 'POST'
+request.headers['x-lua'] = 'present'
+print(dump(request));
 
