@@ -14,7 +14,7 @@ Features include (or will include):
 - **canary releases**: put ruxy in front of two releases of the same application and use it to split traffic among them
 - **extensible**: plan is to support a scripting language (maybe [lua](https://www.lua.org/)) to add your own behavior to ruxy (\*)
 
-**Note**: This application is still under development and features marked with a (\*) are still not available
+**Note**: This application is still under development and features marked with a (\*) are still uncomplete
 
 ### Building
 
@@ -118,6 +118,20 @@ Add twice the same header to a request
 
 	add_request_headers = [ { header = "X-Double-Header", value = "first" }, { header = "X-Double-Header", value = "second" } ]
 
+Reverse the content of a specific header, with a Lua script
+
+	bind = "localhost:8080"
+	remote = "http://some-service/"
+	lua_request_script = './reverse_header.lua'
+
+```
+// reverse_header.lua:
+
+revme = request.headers['x-reverse-me']
+if revme ~= nil then
+  request.headers['x-reverse-me'] = string.reverse(revme)
+end
+```
 
 #### Main section parameters
 
