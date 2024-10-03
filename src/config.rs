@@ -652,6 +652,8 @@ impl RawConfig {
 		self.add_request_headers = self.add_request_headers.take().or(other.add_request_headers);
 		self.remove_reply_headers = self.remove_reply_headers.take().or(other.remove_reply_headers);
 		self.add_reply_headers = self.add_reply_headers.take().or(other.add_reply_headers);
+		self.request_lua_script = self.request_lua_script.take().or(other.request_lua_script);
+		self.request_lua_load_body = self.request_lua_load_body.take().or(other.request_lua_load_body);
 		self.filters = self.filters.take().or(other.filters);
 		self.actions = self.actions.take().or(other.actions);
 		self.rules = self.rules.take().or(other.rules);

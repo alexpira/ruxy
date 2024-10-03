@@ -27,6 +27,8 @@ remove_request_headers = [ "X-Test2" ]
 remove_reply_headers = [ "x-sample" ]
 add_reply_headers = { X-Ok = "Hello" }
 
+request_lua_script="./lua/test.lua"
+
 [filters]
 test = { path = "^/test$", method = "GET" }
 test2_and_below = { path = "^/test2/.*" }

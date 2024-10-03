@@ -87,7 +87,7 @@ fn append_header(headers: &mut HeaderMap, key: String, value: mlua::String, corr
 	Ok(())
 }
 
-fn request_from_lua(lua: &mlua::Lua, mut parts: http::request::Parts, corr_id: &str) -> Result<(http::request::Parts, Box<[u8]>), ServiceError> {
+fn request_from_lua(lua: &mlua::Lua, mut parts: http::request::Parts, corr_id: &str) -> Result<(http::request::Parts, Option<Box<[u8]>>), ServiceError> {
 	let request: mlua::Table = werr!(lua.globals().get("request"));
 
 	let method: String = werr!(request.get("method"));
@@ -153,7 +153,7 @@ fn request_from_lua(lua: &mlua::Lua, mut parts: http::request::Parts, corr_id: &
 		}));
 	}
 
-	let body: Box<[u8]> = werr!(request.get("body"));
+	let body: Option<Box<[u8]>> = request.get("body").ok();
 
 	parts.method = method;
 	parts.uri = uri;
@@ -184,63 +184,51 @@ pub async fn apply_request_script(action: &ConfigAction, req: Request<GatewayBod
 
 	let (parts, body) = req.into_parts();
 
-	if action.lua_request_load_body() {
-		let bdata = body.into_bytes(corr_id).await?;
-
-		let lua = Lua::new();
-
-		if let Err(e) = lua.globals().set("corr_id", corr_id) {
-			error!("{}Cannot set corr_id into globals: {:?}", corr_id, e);
-			return Ok(Request::from_parts(parts, GatewayBody::data(bdata)));
-		}
-		let lreq = match request_to_lua(&lua, &parts) {
-			Ok(v) => v,
-			Err(e) => {
-				error!("{}Cannot set request into globals: {:?}", corr_id, e);
-				return Ok(Request::from_parts(parts, GatewayBody::data(bdata)));
-			},
-		};
-
-		let luabody = bdata.clone();
-		lreq.set("body", &(*luabody)).expect("Failed to set body");
-
-		lua.globals().set("request", lreq).expect("Failed to set request");
-
-		if let Err(e) = lua.load(code).exec() {
-			error!("{}Failed to run lua script: {:?}", corr_id, e);
-			return Ok(Request::from_parts(parts, GatewayBody::data(bdata)));
-		}
-
-		let (parts,body) = request_from_lua(&lua, parts, corr_id)?;
-
-		Ok(Request::from_parts(parts, GatewayBody::data(body.into())))
+	let (bdata,body) = if action.lua_request_load_body() {
+		(Some(body.into_bytes(corr_id).await?),None)
 	} else {
-		let lua = Lua::new();
+		(None,Some(body))
+	};
 
-		if let Err(e) = lua.globals().set("corr_id", corr_id) {
-			error!("{}Cannot set corr_id into globals: {:?}", corr_id, e);
-			return Ok(Request::from_parts(parts, body));
-		}
+	let lua = Lua::new();
 
-		let lreq = match request_to_lua(&lua, &parts) {
-			Ok(v) => v,
-			Err(e) => {
-				error!("{}Cannot set request into globals: {:?}", corr_id, e);
-				return Ok(Request::from_parts(parts, body));
-			},
-		};
+	if let Err(e) = lua.globals().set("corr_id", corr_id) {
+		error!("{}Cannot set corr_id into globals: {:?}", corr_id, e);
+		return Ok(Request::from_parts(parts,
+			bdata.and_then(|v| Some(GatewayBody::data(v))).or(body).unwrap()
+		));
+	}
+	let lreq = match request_to_lua(&lua, &parts) {
+		Ok(v) => v,
+		Err(e) => {
+			error!("{}Cannot set request into globals: {:?}", corr_id, e);
+			return Ok(Request::from_parts(parts,
+				bdata.and_then(|v| Some(GatewayBody::data(v))).or(body).unwrap()
+			));
+		},
+	};
 
-		lua.globals().set("request", lreq).expect("Failed to set request");
+	let body_is_managed = if bdata.is_some() {
+		let luabody = bdata.clone().unwrap();
+		lreq.set("body", &(*luabody)).expect("Failed to set body");
+		true
+	} else { false };
 
-		if let Err(e) = lua.load(code).exec() {
-			error!("{}Failed to run lua script: {:?}", corr_id, e);
-			return Ok(Request::from_parts(parts, body));
-		}
+	lua.globals().set("request", lreq).expect("Failed to set request");
 
-		let (parts,_) = request_from_lua(&lua, parts, corr_id)?;
+	if let Err(e) = lua.load(code).exec() {
+		error!("{}Failed to run lua script: {:?}", corr_id, e);
+		return Ok(Request::from_parts(parts,
+			bdata.and_then(|v| Some(GatewayBody::data(v))).or(body).unwrap()
+		));
+	}
 
-		let req = Request::from_parts(parts, body);
-		Ok(req)
+	let (parts,out_body) = request_from_lua(&lua, parts, corr_id)?;
+
+	if body_is_managed {
+		Ok(Request::from_parts(parts, out_body.and_then(|v| Some(GatewayBody::data(v.into()))).unwrap_or(GatewayBody::empty())))
+	} else {
+		Ok(Request::from_parts(parts, body.unwrap()))
 	}
 }
 
