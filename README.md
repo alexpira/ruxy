@@ -202,7 +202,7 @@ All action properties can be specified in the main section to define default rux
 - **remove_reply_headers**: (array of strings) same as **remove_request_headers** but applied to the response
 - **add_reply_headers**: (table or array) same as **add_request_headers** but applied to the response
 - **lua_request_script**: (string) path to a Lua script that will be invoked for every incoming request; in the script it will be possible to modify the request before it is passed on to the server
-- **lua_request_load_body**: (boolean) set to *true* to enable lua script to read and modify the request payload; be aware that if this option is enabled ruxy will load and store in memory the whole request body and won't do any kind of streaming and that can impact performance; defaults to *false*
+- **lua_request_load_body**: (boolean) set to *true* to enable lua script to read and modify the request payload; be aware that if this option is enabled ruxy will load and store in memory the whole request body disabling any kind of streaming and that can impact performance; defaults to *false*
 
 **Note on logging**: log produced by ruxy will include the following strings:
 
