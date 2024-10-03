@@ -233,6 +233,7 @@ pub async fn apply_request_script(action: &ConfigAction, req: Request<GatewayBod
 }
 
 pub fn apply_response_script(_action: &ConfigAction, res: Response<GatewayBody>, _corr_id: &str) -> Result<Response<GatewayBody>, ServiceError> {
+	// TODO: LUA response handling
 	Ok(res)
 }
 

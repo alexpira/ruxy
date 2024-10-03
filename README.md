@@ -129,7 +129,7 @@ Main section is used for generic parameters. Every parameter that can be defined
 - **log_stream**: boolean, enables low level log of all *server side* sent and received data (inside TLS), very verbose and useful for debugging of ruxy itself
 - **http_server_version**: either "h1" (default) or "h2"; used to define HTTP version used on listening socket
 
-Also, the following values can be defined in the main section to define the default behavior of ruxy: **remote** (mandatory), **rewrite_host**, **http_client_version**, **ssl_mode**, **cafile**, **log**, **log_level**, **log_headers**, **log_request_body**, **max_request_log_size**, **log_reply_body**, **max_reply_log_size**. See *actions* section for details.
+Also, the following values can be defined in the main section to define the default behavior of ruxy: **remote** (mandatory), **rewrite_host**, **http_client_version**, **ssl_mode**, **cafile**, **log**, **log_level**, **log_headers**, **log_request_body**, **max_request_log_size**, **log_reply_body**, **max_reply_log_size**, **lua_request_script**, **lua_request_load_body**. See *actions* section for details.
 
 #### Rules section
 
@@ -187,6 +187,8 @@ All action properties can be specified in the main section to define default rux
 - **add_request_headers**: (table or array) headers to be added to the request before forwarding it; **remove_request_headers** is processed first and to replace an header both must be used; *note*: in order to add the same header more than once an array containing tables with *header* and *value* properties can be used instead of a table... see examples
 - **remove_reply_headers**: (array of strings) same as **remove_request_headers** but applied to the response
 - **add_reply_headers**: (table or array) same as **add_request_headers** but applied to the response
+- **lua_request_script**: (string) path to a Lua script that will be invoked for every incoming request; in the script it will be possible to modify the request before it is passed on to the server
+- **lua_request_load_body**: (boolean) set to *true* to enable lua script to read and modify the request payload; be aware that if this option is enabled ruxy will load and store in memory the whole request body and won't do any kind of streaming and that can impact performance; defaults to *false*
 
 **Note on logging**: log produced by ruxy will include the following strings:
 
@@ -196,6 +198,12 @@ All action properties can be specified in the main section to define default rux
 - "<-R" logs referring to the response as it is sent from ruxy to the client
 
 Also, each request is assigned an unique "correlation ID" in the form of an uuid, which is present on every log event related to that request; that is useful in high traffic scenarios when multiple requests can simultaneously produce logging.
+
+### Lua request handling
+
+If a Lua script is configured, it will be invoked for every request. The global variable *request* will be filled with request data and the script can modify it in order to change the actual request which will be forwarded.
+
+*request* will be set as a Lua table which contains: *method* (a string), *uri* (a table with *path*, *query*, *host*, *port* and *scheme*; depending on the request version and format not all those values are guaranteed to be filled), *headers* (a table whose values can either be strings or arrays of strings for repeated headers) and optionally *body*.
 
 ### Notes on AI training
 
