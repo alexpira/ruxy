@@ -264,6 +264,8 @@ pub struct ConfigAction {
 	add_request_headers: Option<HeaderMap>,
 	remove_reply_headers: Option<Vec<String>>,
 	add_reply_headers: Option<HeaderMap>,
+	request_lua_script: Option<String>,
+	request_lua_load_body: Option<bool>,
 }
 
 impl ConfigAction {
@@ -285,6 +287,8 @@ impl ConfigAction {
 				add_request_headers: t.get("add_request_headers").and_then(|v| parse_header_map(v)),
 				remove_reply_headers: t.get("remove_reply_headers").and_then(|v| parse_array(v)),
 				add_reply_headers: t.get("add_reply_headers").and_then(|v| parse_header_map(v)),
+				request_lua_script: t.get("request_lua_script").and_then(|v| v.as_str()).and_then(|v| Some(v.to_string())),
+				request_lua_load_body: t.get("request_lua_load_body").and_then(|v| v.as_bool()),
 			}),
 			_ => None,
 		}
@@ -306,6 +310,8 @@ impl ConfigAction {
 		self.add_request_headers = self.add_request_headers.take().or(other.add_request_headers.clone());
 		self.remove_reply_headers = self.remove_reply_headers.take().or(other.remove_reply_headers.clone());
 		self.add_reply_headers = self.add_reply_headers.take().or(other.add_reply_headers.clone());
+		self.request_lua_script = self.request_lua_script.take().or(other.request_lua_script.clone());
+		self.request_lua_load_body = self.request_lua_load_body.take().or(other.request_lua_load_body.clone());
 	}
 
 	pub fn get_ssl_mode(&self) -> SslMode {
@@ -356,6 +362,13 @@ impl ConfigAction {
 
 	pub fn client_version(&self) -> HttpVersion {
 		self.http_client_version.unwrap_or(HttpVersion::H1)
+	}
+
+	pub fn lua_request_script(&self) -> Option<&String> {
+		self.request_lua_script.as_ref()
+	}
+	pub fn lua_request_load_body(&self) -> bool {
+		self.request_lua_load_body.unwrap_or(false)
 	}
 
 	pub fn adapt_request(&self, mut req: Request<GatewayBody>, corr_id: &str) -> Result<Request<GatewayBody>, ServiceError> {
@@ -555,6 +568,8 @@ struct RawConfig {
 	add_request_headers: Option<toml::Value>,
 	remove_reply_headers: Option<toml::Value>,
 	add_reply_headers: Option<toml::Value>,
+	request_lua_script: Option<String>,
+	request_lua_load_body: Option<bool>,
 	filters: Option<toml::Table>,
 	actions: Option<toml::Table>,
 	rules: Option<toml::Table>,
@@ -585,6 +600,8 @@ impl RawConfig {
 			add_request_headers: None,
 			remove_reply_headers: None,
 			add_reply_headers: None,
+			request_lua_script: None,
+			request_lua_load_body: None,
 			filters: None,
 			actions: None,
 			rules: None,
@@ -765,6 +782,8 @@ impl Config {
 				add_request_headers: raw_cfg.add_request_headers.as_ref().and_then(|v| parse_header_map(v)),
 				remove_reply_headers: raw_cfg.remove_reply_headers.as_ref().and_then(|v| parse_array(v)),
 				add_reply_headers: raw_cfg.add_reply_headers.as_ref().and_then(|v| parse_header_map(v)),
+				request_lua_script: raw_cfg.request_lua_script.clone(),
+				request_lua_load_body: raw_cfg.request_lua_load_body,
 			},
 			bind: Self::parse_bind(&raw_cfg),
 			graceful_shutdown_timeout: Self::parse_graceful_shutdown_timeout(&raw_cfg),

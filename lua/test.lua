@@ -20,5 +20,11 @@ request.uri.path = 'hello'
 request.uri.query = ''
 request.method = 'POST'
 request.headers['x-lua'] = 'present'
+
+revme = request.headers['x-reverse-me']
+if revme ~= nil then
+  request.headers['x-reverse-me'] = string.reverse(revme)
+end
+
 print(dump(request));
 

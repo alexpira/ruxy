@@ -163,7 +163,10 @@ fn request_from_lua(lua: &mlua::Lua, mut parts: http::request::Parts, corr_id: &
 }
 
 pub async fn apply_request_script(action: &ConfigAction, req: Request<GatewayBody>, corr_id: &str) -> Result<Request<GatewayBody>, ServiceError> {
-	let script = "./lua/test.lua"; // TODO: load from action
+	let script = match action.lua_request_script() {
+		Some(v) => v,
+		None => return Ok(req),
+	};
 
 	let code = match load_file(script) {
 		Err(e) => {
@@ -180,39 +183,65 @@ pub async fn apply_request_script(action: &ConfigAction, req: Request<GatewayBod
 	};
 
 	let (parts, body) = req.into_parts();
-	let bdata = body.into_bytes(corr_id).await?;
 
-	let lua = Lua::new();
+	if action.lua_request_load_body() {
+		let bdata = body.into_bytes(corr_id).await?;
 
-	if let Err(e) = lua.globals().set("corr_id", corr_id) {
-		error!("{}Cannot set corr_id into globals: {:?}", corr_id, e);
-		let req = Request::from_parts(parts, GatewayBody::data(bdata));
-		return Ok(req);
+		let lua = Lua::new();
+
+		if let Err(e) = lua.globals().set("corr_id", corr_id) {
+			error!("{}Cannot set corr_id into globals: {:?}", corr_id, e);
+			return Ok(Request::from_parts(parts, GatewayBody::data(bdata)));
+		}
+		let lreq = match request_to_lua(&lua, &parts) {
+			Ok(v) => v,
+			Err(e) => {
+				error!("{}Cannot set request into globals: {:?}", corr_id, e);
+				return Ok(Request::from_parts(parts, GatewayBody::data(bdata)));
+			},
+		};
+
+		let luabody = bdata.clone();
+		lreq.set("body", &(*luabody)).expect("Failed to set body");
+
+		lua.globals().set("request", lreq).expect("Failed to set request");
+
+		if let Err(e) = lua.load(code).exec() {
+			error!("{}Failed to run lua script: {:?}", corr_id, e);
+			return Ok(Request::from_parts(parts, GatewayBody::data(bdata)));
+		}
+
+		let (parts,body) = request_from_lua(&lua, parts, corr_id)?;
+
+		Ok(Request::from_parts(parts, GatewayBody::data(body.into())))
+	} else {
+		let lua = Lua::new();
+
+		if let Err(e) = lua.globals().set("corr_id", corr_id) {
+			error!("{}Cannot set corr_id into globals: {:?}", corr_id, e);
+			return Ok(Request::from_parts(parts, body));
+		}
+
+		let lreq = match request_to_lua(&lua, &parts) {
+			Ok(v) => v,
+			Err(e) => {
+				error!("{}Cannot set request into globals: {:?}", corr_id, e);
+				return Ok(Request::from_parts(parts, body));
+			},
+		};
+
+		lua.globals().set("request", lreq).expect("Failed to set request");
+
+		if let Err(e) = lua.load(code).exec() {
+			error!("{}Failed to run lua script: {:?}", corr_id, e);
+			return Ok(Request::from_parts(parts, body));
+		}
+
+		let (parts,_) = request_from_lua(&lua, parts, corr_id)?;
+
+		let req = Request::from_parts(parts, body);
+		Ok(req)
 	}
-	let lreq = match request_to_lua(&lua, &parts) {
-		Ok(v) => v,
-		Err(e) => {
-			error!("{}Cannot set request into globals: {:?}", corr_id, e);
-			let req = Request::from_parts(parts, GatewayBody::data(bdata));
-			return Ok(req);
-		},
-	};
-
-	let luabody = bdata.clone();
-	lreq.set("body", &(*luabody)).expect("Failed to set body");
-
-	lua.globals().set("request", lreq).expect("Failed to set request");
-
-	if let Err(e) = lua.load(code).exec() {
-		error!("{}Failed to run lua script: {:?}", corr_id, e);
-		let req = Request::from_parts(parts, GatewayBody::data(bdata));
-		return Ok(req);
-	}
-
-	let (parts,body) = request_from_lua(&lua, parts, corr_id)?;
-
-	let req = Request::from_parts(parts, GatewayBody::data(body.into()));
-	Ok(req)
 }
 
 pub fn apply_response_script(_action: &ConfigAction, res: Response<GatewayBody>, _corr_id: &str) -> Result<Response<GatewayBody>, ServiceError> {
