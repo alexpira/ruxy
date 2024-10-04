@@ -178,7 +178,7 @@ impl GatewayService {
 		Self::log_request(action, &req, client_addr, corr_id, "->R");
 		let modified_request = action.client_version().adapt_request(cfg, action, req, corr_id)?;
 		let modified_request = action.adapt_request(modified_request, corr_id)?;
-		let modified_request = lua::apply_request_script(&action, modified_request, corr_id).await?;
+		let modified_request = lua::apply_request_script(&action, modified_request, client_addr, corr_id).await?;
 		Self::log_request(action, &modified_request, client_addr, corr_id, "R->");
 		Ok(modified_request)
 	}

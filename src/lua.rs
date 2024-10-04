@@ -9,7 +9,7 @@ use crate::net::GatewayBody;
 use crate::service::ServiceError;
 use crate::filesys::load_file;
 
-fn request_to_lua<'a>(lua: &'a Lua, req: &http::request::Parts) -> LuaResult<mlua::Table<'a>> {
+fn request_to_lua<'a>(lua: &'a Lua, req: &http::request::Parts, client_addr: &str) -> LuaResult<mlua::Table<'a>> {
 	let request = lua.create_table()?;
 	request.set("method", req.method.as_str())?;
 
@@ -54,6 +54,7 @@ fn request_to_lua<'a>(lua: &'a Lua, req: &http::request::Parts) -> LuaResult<mlu
 		}
 	}
 	request.set("headers", headers)?;
+	request.set("src", client_addr)?;
 
 	Ok(request)
 }
@@ -162,7 +163,7 @@ fn request_from_lua(lua: &mlua::Lua, mut parts: http::request::Parts, corr_id: &
 	Ok((parts, body))
 }
 
-pub async fn apply_request_script(action: &ConfigAction, req: Request<GatewayBody>, corr_id: &str) -> Result<Request<GatewayBody>, ServiceError> {
+pub async fn apply_request_script(action: &ConfigAction, req: Request<GatewayBody>, client_addr: &str, corr_id: &str) -> Result<Request<GatewayBody>, ServiceError> {
 	let script = match action.lua_request_script() {
 		Some(v) => v,
 		None => return Ok(req),
@@ -198,7 +199,7 @@ pub async fn apply_request_script(action: &ConfigAction, req: Request<GatewayBod
 			bdata.and_then(|v| Some(GatewayBody::data(v))).or(body).unwrap()
 		));
 	}
-	let lreq = match request_to_lua(&lua, &parts) {
+	let lreq = match request_to_lua(&lua, &parts, client_addr) {
 		Ok(v) => v,
 		Err(e) => {
 			error!("{}Cannot set request into globals: {:?}", corr_id, e);

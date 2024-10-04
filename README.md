@@ -201,9 +201,14 @@ Also, each request is assigned an unique "correlation ID" in the form of an uuid
 
 ### Lua request handling
 
-If a Lua script is configured, it will be invoked for every request. The global variable *request* will be filled with request data and the script can modify it in order to change the actual request which will be forwarded.
+If a Lua script is configured, it will be invoked for every request. The global variable **request** will be filled with request data and the script can modify it in order to change the actual request which will be forwarded.
 
-*request* will be set as a Lua table which contains: *method* (a string), *uri* (a table with *path*, *query*, *host*, *port* and *scheme*; depending on the request version and format not all those values are guaranteed to be filled), *headers* (a table whose values can either be strings or arrays of strings for repeated headers) and optionally *body*.
+**request** will be set as a Lua table which contains:
+- **src**: source IP address and port, as string
+- **method**: HTTP verb (i.e. GET, POST, etc...)
+- **uri**: a table containing **path**, **query**, **host**, **port** and **scheme**; depending on the request version and format not all those values are guaranteed to be filled
+- **headers**: a table whose values can either be strings or arrays of strings for repeated headers
+- **body**: the request payload, set only if **lua_request_load_body** configuration is active
 
 ### Notes on AI training
 
