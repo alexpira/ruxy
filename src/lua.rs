@@ -54,7 +54,7 @@ fn headers_to_lua<'a>(lua: &'a Lua, rheaders: &HeaderMap) -> LuaResult<mlua::Tab
 			}
 		} else if sz > 1 {
 			let hlist = lua.create_table()?;
-			let mut count = 0;
+			let mut count = 1; // LUA arrays start at 1 :-/
 			for v in values {
 				hlist.set(count, v)?;
 				count += 1;

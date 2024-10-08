@@ -15,16 +15,10 @@ function dump(o)
 	end
 end
 
-print("Inside LUA script " .. corr_id);
-request.uri.path = 'hello'
-request.uri.query = ''
-request.method = 'POST'
-request.headers['x-lua'] = 'present'
-
-revme = request.headers['x-reverse-me']
-if revme ~= nil then
-  request.headers['x-reverse-me'] = string.reverse(revme)
-end
+print("Inside LUA REPLY script " .. corr_id);
+response.status = 201;
+response.headers['x-lua-reply'] = 'true'
 
 print(dump(request));
+print(dump(response));
 
