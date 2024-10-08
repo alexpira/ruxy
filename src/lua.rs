@@ -13,7 +13,7 @@ macro_rules! werr {
 	( $data: expr ) => { match $data {
 		Ok(v) => v,
 		Err(e) => {
-			return Err(ServiceError::remap("Failed to convert request from lua".to_string(), hyper::StatusCode::BAD_GATEWAY, e));
+			return Err(ServiceError::remap("Failed to convert from lua".to_string(), hyper::StatusCode::BAD_GATEWAY, e));
 		}
 	} }
 }
@@ -177,6 +177,10 @@ fn response_to_lua<'a>(lua: &'a Lua, res: &http::response::Parts) -> LuaResult<m
 
 	response.set("status", res.status.as_u16())?;
 
+	if let Some(reason) = res.extensions.get::<hyper::ext::ReasonPhrase>().and_then(|v| std::str::from_utf8(v.as_bytes()).ok()) {
+		response.set("reason", reason)?;
+	}
+
 	let headers = headers_to_lua(lua, &res.headers)?;
 	response.set("headers", headers)?;
 
@@ -187,6 +191,7 @@ fn response_from_lua(lua: &mlua::Lua, mut parts: http::response::Parts, corr_id:
 	let response: mlua::Table = werr!(lua.globals().get("response"));
 
 	let status: u16 = werr!(response.get("status"));
+	let reason: mlua::Value = werr!(response.get("reason"));
 
 	let headers = headers_from_lua(&response, corr_id)?;
 
@@ -200,6 +205,9 @@ fn response_from_lua(lua: &mlua::Lua, mut parts: http::response::Parts, corr_id:
 		}
 	};
 	parts.headers = headers;
+	if let Some(reason) = reason.as_str().and_then(|v| hyper::ext::ReasonPhrase::try_from(v.as_bytes()).ok()) {
+		parts.extensions.insert(reason);
+	}
 
 	Ok((parts, body))
 }

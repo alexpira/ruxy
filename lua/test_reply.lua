@@ -17,6 +17,7 @@ end
 
 print("Inside LUA REPLY script " .. corr_id);
 response.status = 201;
+response.reason = "Yeah"
 response.headers['x-lua-reply'] = 'true'
 
 print(dump(request));

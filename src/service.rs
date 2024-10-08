@@ -242,7 +242,9 @@ impl GatewayService {
 
 		remote_pool_release!(&sender.key, sender.value);
 
-		Self::mangle_reply(&action, remote_resp?, req_clone, &client_addr, &corr_id).await
+		let remote_resp = remote_resp?;
+
+		Self::mangle_reply(&action, remote_resp, req_clone, &client_addr, &corr_id).await
 	}
 }
 
