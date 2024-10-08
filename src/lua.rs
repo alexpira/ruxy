@@ -18,8 +18,28 @@ macro_rules! werr {
 	} }
 }
 
+fn append_header(headers: &mut HeaderMap, key: String, value: mlua::String, corr_id: &str) -> mlua::Result<()> {
+	let hk = match HeaderName::from_bytes(&key.clone().into_bytes()) {
+		Ok(v) => v,
+		Err(e) => {
+			error!("{}Cannot convert lua header name '{}': {:?}", corr_id, key, e);
+			return Err(mlua::Error::RuntimeError(format!("Cannot convert lua header name '{}': {:?}", key, e)));
+		}
+	};
+	let hv = match HeaderValue::from_bytes(&value.as_bytes()) {
+		Ok(v) => v,
+		Err(e) => {
+			error!("{}Cannot convert lua header value for '{}': {:?}", corr_id, key, e);
+			return Err(mlua::Error::RuntimeError(format!("Cannot convert lua header value for '{}': {:?}", key, e)));
+		}
+	};
+
+	headers.append(hk, hv);
+	Ok(())
+}
+
 fn request_to_lua<'a>(lua: &'a Lua, req: &http::request::Parts, client_addr: &str) -> LuaResult<mlua::Table<'a>> {
-	let request = lua.create_table()?;
+let request = lua.create_table()?;
 	request.set("method", req.method.as_str())?;
 
 	let uri = lua.create_table()?;
@@ -66,26 +86,6 @@ fn request_to_lua<'a>(lua: &'a Lua, req: &http::request::Parts, client_addr: &st
 	request.set("src", client_addr)?;
 
 	Ok(request)
-}
-
-fn append_header(headers: &mut HeaderMap, key: String, value: mlua::String, corr_id: &str) -> mlua::Result<()> {
-	let hk = match HeaderName::from_bytes(&key.clone().into_bytes()) {
-		Ok(v) => v,
-		Err(e) => {
-			error!("{}Cannot convert lua header name '{}': {:?}", corr_id, key, e);
-			return Err(mlua::Error::RuntimeError(format!("Cannot convert lua header name '{}': {:?}", key, e)));
-		}
-	};
-	let hv = match HeaderValue::from_bytes(&value.as_bytes()) {
-		Ok(v) => v,
-		Err(e) => {
-			error!("{}Cannot convert lua header value for '{}': {:?}", corr_id, key, e);
-			return Err(mlua::Error::RuntimeError(format!("Cannot convert lua header value for '{}': {:?}", key, e)));
-		}
-	};
-
-	headers.append(hk, hv);
-	Ok(())
 }
 
 fn request_from_lua(lua: &mlua::Lua, mut parts: http::request::Parts, corr_id: &str) -> Result<(http::request::Parts, Option<Box<[u8]>>), ServiceError> {
@@ -163,8 +163,37 @@ fn request_from_lua(lua: &mlua::Lua, mut parts: http::request::Parts, corr_id: &
 	Ok((parts, body))
 }
 
-fn response_to_lua<'a>(lua: &'a Lua, res: &http::response::Parts, client_addr: &str) -> LuaResult<mlua::Table<'a>> {
+fn response_to_lua<'a>(lua: &'a Lua, res: &http::response::Parts) -> LuaResult<mlua::Table<'a>> {
 	let response = lua.create_table()?;
+
+	response.set("status", res.status.as_u16())?;
+
+	let headers = lua.create_table()?;
+	let rheaders = &res.headers;
+	for key in rheaders.keys() {
+		let mut values = Vec::new();
+		for v in rheaders.get_all(key) {
+			if let Ok(vs) = v.to_str() {
+				values.push(vs);
+			}
+		}
+		let sz = values.len();
+		if sz == 1 {
+			if let Some(only) = values.pop() {
+				headers.set(key.as_str(), only)?;
+			}
+		} else if sz > 1 {
+			let hlist = lua.create_table()?;
+			let mut count = 0;
+			for v in values {
+				hlist.set(count, v)?;
+				count += 1;
+			}
+			headers.set(key.as_str(), hlist)?;
+		}
+	}
+	response.set("headers", headers)?;
+
 	Ok(response)
 }
 
@@ -242,7 +271,7 @@ pub async fn apply_request_script(action: &ConfigAction, req: Request<GatewayBod
 	}
 }
 
-pub async fn apply_response_script(action: &ConfigAction, res: Response<GatewayBody>, client_addr: &str, corr_id: &str) -> Result<Response<GatewayBody>, ServiceError> {
+pub async fn apply_response_script(action: &ConfigAction, res: Response<GatewayBody>, req: http::request::Parts, client_addr: &str, corr_id: &str) -> Result<Response<GatewayBody>, ServiceError> {
 	let script = match action.lua_reply_script() {
 		Some(v) => v,
 		None => return Ok(res),
@@ -278,7 +307,16 @@ pub async fn apply_response_script(action: &ConfigAction, res: Response<GatewayB
 			bdata.and_then(|v| Some(GatewayBody::data(v))).or(body).unwrap()
 		));
 	}
-	let lres = match response_to_lua(&lua, &parts, client_addr) {
+	let lreq = match request_to_lua(&lua, &req, client_addr) {
+		Ok(v) => v,
+		Err(e) => {
+			error!("{}Cannot set request into globals: {:?}", corr_id, e);
+			return Ok(Response::from_parts(parts,
+				bdata.and_then(|v| Some(GatewayBody::data(v))).or(body).unwrap()
+			));
+		},
+	};
+	let lres = match response_to_lua(&lua, &parts) {
 		Ok(v) => v,
 		Err(e) => {
 			error!("{}Cannot set response into globals: {:?}", corr_id, e);
@@ -294,6 +332,7 @@ pub async fn apply_response_script(action: &ConfigAction, res: Response<GatewayB
 		true
 	} else { false };
 
+	lua.globals().set("request", lreq).expect("Failed to set request");
 	lua.globals().set("response", lres).expect("Failed to set response");
 
 	if let Err(e) = lua.load(code).exec() {
