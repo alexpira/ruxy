@@ -23,11 +23,11 @@ pub struct ServiceError {
 	message: String,
 	status: StatusCode,
 	body: GatewayBody,
-	source: Option<Box<dyn Error>>,
+	source: Option<Box<dyn Error + Send>>,
 }
 
 impl ServiceError {
-	pub fn remap<T>(message: String, status: StatusCode, e: T) -> Self where T: Error + 'static {
+	pub fn remap<T>(message: String, status: StatusCode, e: T) -> Self where T: Error + Send + 'static {
 		Self {
 			message: message,
 			status: status,
@@ -183,7 +183,7 @@ impl GatewayService {
 		Ok(modified_request)
 	}
 
-	fn mangle_reply(action: &ConfigAction, remote_resp: Response<Incoming>, client_addr: &str, corr_id: &str) -> Result<Response<GatewayBody>, ServiceError> {
+	async fn mangle_reply(action: &ConfigAction, remote_resp: Response<Incoming>, client_addr: &str, corr_id: &str) -> Result<Response<GatewayBody>, ServiceError> {
 		let response = remote_resp.map(|v| {
 			let mut body = GatewayBody::wrap(v);
 			if action.log_reply_body() {
@@ -194,7 +194,7 @@ impl GatewayService {
 		Self::log_reply(action, &response, client_addr, corr_id, "R<-");
 		let modified_response = action.client_version().adapt_response(action, response)?;
 		let modified_response = action.adapt_response(modified_response, corr_id)?;
-		let modified_response = lua::apply_response_script(&action, modified_response, corr_id)?;
+		let modified_response = lua::apply_response_script(&action, modified_response, client_addr, corr_id).await?;
 		Self::log_reply(action, &modified_response, client_addr, corr_id, "<-R");
 		Ok(modified_response)
 	}
@@ -270,20 +270,30 @@ impl Service<Request<Incoming>> for GatewayService {
 				}
 			}
 
-			Self::forward(&cfg, &action, req, &client_addr, &corr_id)
-				.await
-				.and_then(|remote_resp| {
-					if let Ok(mut locked) = cfg_local.lock() {
-						let status = remote_resp.status();
-						locked.notify_reply(rules, &status);
-					}
-					Self::mangle_reply(&action, remote_resp, &client_addr, &corr_id)
-				}).or_else(|e| {
+			let remote_resp = match Self::forward(&cfg, &action, req, &client_addr, &corr_id).await {
+				Err(e) => {
+					error!("Call forward failed: {:?}", e.message);
+					return Response::builder()
+						.status(e.status)
+						.body(e.body);
+				},
+				Ok(remote_resp) => remote_resp,
+			};
+
+			if let Ok(mut locked) = cfg_local.lock() {
+				let status = remote_resp.status();
+				locked.notify_reply(rules, &status);
+			}
+
+			match Self::mangle_reply(&action, remote_resp, &client_addr, &corr_id).await {
+				Ok(v) => Ok(v),
+				Err(e) => {
 					error!("Call forward failed: {:?}", e.message);
 					Response::builder()
 						.status(e.status)
 						.body(e.body)
-				})
+				}
+			}
 		})
 	}
 }

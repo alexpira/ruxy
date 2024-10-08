@@ -9,6 +9,15 @@ use crate::net::GatewayBody;
 use crate::service::ServiceError;
 use crate::filesys::load_file;
 
+macro_rules! werr {
+	( $data: expr ) => { match $data {
+		Ok(v) => v,
+		Err(e) => {
+			return Err(ServiceError::remap("Failed to convert request from lua".to_string(), hyper::StatusCode::BAD_GATEWAY, e));
+		}
+	} }
+}
+
 fn request_to_lua<'a>(lua: &'a Lua, req: &http::request::Parts, client_addr: &str) -> LuaResult<mlua::Table<'a>> {
 	let request = lua.create_table()?;
 	request.set("method", req.method.as_str())?;
@@ -57,15 +66,6 @@ fn request_to_lua<'a>(lua: &'a Lua, req: &http::request::Parts, client_addr: &st
 	request.set("src", client_addr)?;
 
 	Ok(request)
-}
-
-macro_rules! werr {
-	( $data: expr ) => { match $data {
-		Ok(v) => v,
-		Err(e) => {
-			return Err(ServiceError::remap("Failed to convert request from lua".to_string(), hyper::StatusCode::BAD_GATEWAY, e));
-		}
-	} }
 }
 
 fn append_header(headers: &mut HeaderMap, key: String, value: mlua::String, corr_id: &str) -> mlua::Result<()> {
@@ -163,6 +163,15 @@ fn request_from_lua(lua: &mlua::Lua, mut parts: http::request::Parts, corr_id: &
 	Ok((parts, body))
 }
 
+fn response_to_lua<'a>(lua: &'a Lua, res: &http::response::Parts, client_addr: &str) -> LuaResult<mlua::Table<'a>> {
+	let response = lua.create_table()?;
+	Ok(response)
+}
+
+fn response_from_lua(lua: &mlua::Lua, mut parts: http::response::Parts, corr_id: &str) -> Result<(http::response::Parts, Option<Box<[u8]>>), ServiceError> {
+	Ok((parts, None))
+}
+
 pub async fn apply_request_script(action: &ConfigAction, req: Request<GatewayBody>, client_addr: &str, corr_id: &str) -> Result<Request<GatewayBody>, ServiceError> {
 	let script = match action.lua_request_script() {
 		Some(v) => v,
@@ -233,8 +242,73 @@ pub async fn apply_request_script(action: &ConfigAction, req: Request<GatewayBod
 	}
 }
 
-pub fn apply_response_script(_action: &ConfigAction, res: Response<GatewayBody>, _corr_id: &str) -> Result<Response<GatewayBody>, ServiceError> {
-	// TODO: LUA response handling
-	Ok(res)
+pub async fn apply_response_script(action: &ConfigAction, res: Response<GatewayBody>, client_addr: &str, corr_id: &str) -> Result<Response<GatewayBody>, ServiceError> {
+	let script = match action.lua_reply_script() {
+		Some(v) => v,
+		None => return Ok(res),
+	};
+
+	let code = match load_file(script) {
+		Err(e) => {
+			error!("{}cannot load {}: {:?}", corr_id, script, e);
+			return Ok(res);
+		},
+		Ok(v) => match v {
+			None => {
+				warn!("{}File '{}' not found", corr_id, script);
+				return Ok(res);
+			},
+			Some(v) => v,
+		}
+	};
+
+	let (parts, body) = res.into_parts();
+
+	let (bdata,body) = if action.lua_reply_load_body() {
+		(Some(body.into_bytes(corr_id).await?),None)
+	} else {
+		(None,Some(body))
+	};
+
+	let lua = Lua::new();
+
+	if let Err(e) = lua.globals().set("corr_id", corr_id) {
+		error!("{}Cannot set corr_id into globals: {:?}", corr_id, e);
+		return Ok(Response::from_parts(parts,
+			bdata.and_then(|v| Some(GatewayBody::data(v))).or(body).unwrap()
+		));
+	}
+	let lres = match response_to_lua(&lua, &parts, client_addr) {
+		Ok(v) => v,
+		Err(e) => {
+			error!("{}Cannot set response into globals: {:?}", corr_id, e);
+			return Ok(Response::from_parts(parts,
+				bdata.and_then(|v| Some(GatewayBody::data(v))).or(body).unwrap()
+			));
+		},
+	};
+
+	let body_is_managed = if bdata.is_some() {
+		let luabody = bdata.clone().unwrap();
+		lres.set("body", &(*luabody)).expect("Failed to set body");
+		true
+	} else { false };
+
+	lua.globals().set("response", lres).expect("Failed to set response");
+
+	if let Err(e) = lua.load(code).exec() {
+		error!("{}Failed to run lua script: {:?}", corr_id, e);
+		return Ok(Response::from_parts(parts,
+			bdata.and_then(|v| Some(GatewayBody::data(v))).or(body).unwrap()
+		));
+	}
+
+	let (parts,out_body) = response_from_lua(&lua, parts, corr_id)?;
+
+	if body_is_managed {
+		Ok(Response::from_parts(parts, out_body.and_then(|v| Some(GatewayBody::data(v.into()))).unwrap_or(GatewayBody::empty())))
+	} else {
+		Ok(Response::from_parts(parts, body.unwrap()))
+	}
 }
 
