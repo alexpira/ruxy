@@ -38,28 +38,8 @@ fn append_header(headers: &mut HeaderMap, key: String, value: mlua::String, corr
 	Ok(())
 }
 
-fn request_to_lua<'a>(lua: &'a Lua, req: &http::request::Parts, client_addr: &str) -> LuaResult<mlua::Table<'a>> {
-let request = lua.create_table()?;
-	request.set("method", req.method.as_str())?;
-
-	let uri = lua.create_table()?;
-	uri.set("path", req.uri.path())?;
-	if let Some(q) = req.uri.query() {
-		uri.set("query", q)?;
-	}
-	if let Some(h) = req.uri.host() {
-		uri.set("host", h)?;
-	}
-	if let Some(p) = req.uri.port_u16() {
-		uri.set("port", p)?;
-	}
-	if let Some(s) = req.uri.scheme_str() {
-		uri.set("scheme", s)?;
-	}
-	request.set("uri", uri)?;
-
+fn headers_to_lua<'a>(lua: &'a Lua, rheaders: &HeaderMap) -> LuaResult<mlua::Table<'a>> {
 	let headers = lua.create_table()?;
-	let rheaders = &req.headers;
 	for key in rheaders.keys() {
 		let mut values = Vec::new();
 		for v in rheaders.get_all(key) {
@@ -82,6 +62,52 @@ let request = lua.create_table()?;
 			headers.set(key.as_str(), hlist)?;
 		}
 	}
+	Ok(headers)
+}
+
+fn headers_from_lua(container: &mlua::Table, corr_id: &str) -> Result<HeaderMap,ServiceError> {
+	let mut headers = HeaderMap::new();
+	if let Some(lhdrs) = werr!(container.get::<&str, mlua::Value>("headers")).as_table() {
+		werr!(lhdrs.for_each(|k: String, v: mlua::Value| {
+			match v {
+				mlua::Value::String(st) => append_header(&mut headers, k, st, corr_id),
+				mlua::Value::Table(values) => {
+					values.for_each(|_: mlua::Value, v: mlua::Value| {
+						if let mlua::Value::String(st) = v {
+							append_header(&mut headers, k.clone(), st, corr_id)
+						} else {
+							Ok(())
+						}
+					})
+				},
+				_ => Ok(()),
+			}
+		}));
+	}
+	Ok(headers)
+}
+
+fn request_to_lua<'a>(lua: &'a Lua, req: &http::request::Parts, client_addr: &str) -> LuaResult<mlua::Table<'a>> {
+let request = lua.create_table()?;
+	request.set("method", req.method.as_str())?;
+
+	let uri = lua.create_table()?;
+	uri.set("path", req.uri.path())?;
+	if let Some(q) = req.uri.query() {
+		uri.set("query", q)?;
+	}
+	if let Some(h) = req.uri.host() {
+		uri.set("host", h)?;
+	}
+	if let Some(p) = req.uri.port_u16() {
+		uri.set("port", p)?;
+	}
+	if let Some(s) = req.uri.scheme_str() {
+		uri.set("scheme", s)?;
+	}
+	request.set("uri", uri)?;
+
+	let headers = headers_to_lua(lua, &req.headers)?;
 	request.set("headers", headers)?;
 	request.set("src", client_addr)?;
 
@@ -135,24 +161,7 @@ fn request_from_lua(lua: &mlua::Lua, mut parts: http::request::Parts, corr_id: &
 
 	let uri = werr!(http::Uri::from_parts(uri_parts));
 
-	let mut headers = HeaderMap::new();
-	if let Some(lhdrs) = werr!(request.get::<&str, mlua::Value>("headers")).as_table() {
-		werr!(lhdrs.for_each(|k: String, v: mlua::Value| {
-			match v {
-				mlua::Value::String(st) => append_header(&mut headers, k, st, corr_id),
-				mlua::Value::Table(values) => {
-					values.for_each(|_: mlua::Value, v: mlua::Value| {
-						if let mlua::Value::String(st) = v {
-							append_header(&mut headers, k.clone(), st, corr_id)
-						} else {
-							Ok(())
-						}
-					})
-				},
-				_ => Ok(()),
-			}
-		}));
-	}
+	let headers = headers_from_lua(&request, corr_id)?;
 
 	let body: Option<Box<[u8]>> = request.get("body").ok();
 
@@ -168,30 +177,7 @@ fn response_to_lua<'a>(lua: &'a Lua, res: &http::response::Parts) -> LuaResult<m
 
 	response.set("status", res.status.as_u16())?;
 
-	let headers = lua.create_table()?;
-	let rheaders = &res.headers;
-	for key in rheaders.keys() {
-		let mut values = Vec::new();
-		for v in rheaders.get_all(key) {
-			if let Ok(vs) = v.to_str() {
-				values.push(vs);
-			}
-		}
-		let sz = values.len();
-		if sz == 1 {
-			if let Some(only) = values.pop() {
-				headers.set(key.as_str(), only)?;
-			}
-		} else if sz > 1 {
-			let hlist = lua.create_table()?;
-			let mut count = 0;
-			for v in values {
-				hlist.set(count, v)?;
-				count += 1;
-			}
-			headers.set(key.as_str(), hlist)?;
-		}
-	}
+	let headers = headers_to_lua(lua, &res.headers)?;
 	response.set("headers", headers)?;
 
 	Ok(response)
@@ -202,24 +188,7 @@ fn response_from_lua(lua: &mlua::Lua, mut parts: http::response::Parts, corr_id:
 
 	let status: u16 = werr!(response.get("status"));
 
-	let mut headers = HeaderMap::new();
-	if let Some(lhdrs) = werr!(response.get::<&str, mlua::Value>("headers")).as_table() {
-		werr!(lhdrs.for_each(|k: String, v: mlua::Value| {
-			match v {
-				mlua::Value::String(st) => append_header(&mut headers, k, st, corr_id),
-				mlua::Value::Table(values) => {
-					values.for_each(|_: mlua::Value, v: mlua::Value| {
-						if let mlua::Value::String(st) = v {
-							append_header(&mut headers, k.clone(), st, corr_id)
-						} else {
-							Ok(())
-						}
-					})
-				},
-				_ => Ok(()),
-			}
-		}));
-	}
+	let headers = headers_from_lua(&response, corr_id)?;
 
 	let body: Option<Box<[u8]>> = response.get("body").ok();
 
@@ -230,6 +199,7 @@ fn response_from_lua(lua: &mlua::Lua, mut parts: http::response::Parts, corr_id:
 			parts.status
 		}
 	};
+	parts.headers = headers;
 
 	Ok((parts, body))
 }
