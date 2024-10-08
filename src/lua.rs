@@ -198,7 +198,40 @@ fn response_to_lua<'a>(lua: &'a Lua, res: &http::response::Parts) -> LuaResult<m
 }
 
 fn response_from_lua(lua: &mlua::Lua, mut parts: http::response::Parts, corr_id: &str) -> Result<(http::response::Parts, Option<Box<[u8]>>), ServiceError> {
-	Ok((parts, None))
+	let response: mlua::Table = werr!(lua.globals().get("response"));
+
+	let status: u16 = werr!(response.get("status"));
+
+	let mut headers = HeaderMap::new();
+	if let Some(lhdrs) = werr!(response.get::<&str, mlua::Value>("headers")).as_table() {
+		werr!(lhdrs.for_each(|k: String, v: mlua::Value| {
+			match v {
+				mlua::Value::String(st) => append_header(&mut headers, k, st, corr_id),
+				mlua::Value::Table(values) => {
+					values.for_each(|_: mlua::Value, v: mlua::Value| {
+						if let mlua::Value::String(st) = v {
+							append_header(&mut headers, k.clone(), st, corr_id)
+						} else {
+							Ok(())
+						}
+					})
+				},
+				_ => Ok(()),
+			}
+		}));
+	}
+
+	let body: Option<Box<[u8]>> = response.get("body").ok();
+
+	parts.status = match http::StatusCode::from_u16(status) {
+		Ok(v) => v,
+		Err(_) => {
+			error!("{}invalid response status code: {}", corr_id, status);
+			parts.status
+		}
+	};
+
+	Ok((parts, body))
 }
 
 pub async fn apply_request_script(action: &ConfigAction, req: Request<GatewayBody>, client_addr: &str, corr_id: &str) -> Result<Request<GatewayBody>, ServiceError> {
@@ -223,7 +256,7 @@ pub async fn apply_request_script(action: &ConfigAction, req: Request<GatewayBod
 
 	let (parts, body) = req.into_parts();
 
-	let (bdata,body) = if action.lua_request_load_body() {
+	let (bdata, body) = if action.lua_request_load_body() {
 		(Some(body.into_bytes(corr_id).await?),None)
 	} else {
 		(None,Some(body))
@@ -293,7 +326,7 @@ pub async fn apply_response_script(action: &ConfigAction, res: Response<GatewayB
 
 	let (parts, body) = res.into_parts();
 
-	let (bdata,body) = if action.lua_reply_load_body() {
+	let (bdata, body) = if action.lua_reply_load_body() {
 		(Some(body.into_bytes(corr_id).await?),None)
 	} else {
 		(None,Some(body))
