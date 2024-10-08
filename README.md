@@ -14,7 +14,7 @@ Features include (or will include):
 - **canary releases**: put ruxy in front of two releases of the same application and use it to split traffic among them
 - **extensible**: plan is to support a scripting language (maybe [lua](https://www.lua.org/)) to add your own behavior to ruxy (\*)
 
-**Note**: This application is still under development and features marked with a (\*) are still not available
+**Note**: This application is still under development and features marked with a (\*) are still uncomplete
 
 ### Building
 
@@ -118,6 +118,20 @@ Add twice the same header to a request
 
 	add_request_headers = [ { header = "X-Double-Header", value = "first" }, { header = "X-Double-Header", value = "second" } ]
 
+Reverse the content of a specific header, with a Lua script
+
+	bind = "localhost:8080"
+	remote = "http://some-service/"
+	lua_request_script = './reverse_header.lua'
+
+```
+// reverse_header.lua:
+
+revme = request.headers['x-reverse-me']
+if revme ~= nil then
+  request.headers['x-reverse-me'] = string.reverse(revme)
+end
+```
 
 #### Main section parameters
 
@@ -188,7 +202,7 @@ All action properties can be specified in the main section to define default rux
 - **remove_reply_headers**: (array of strings) same as **remove_request_headers** but applied to the response
 - **add_reply_headers**: (table or array) same as **add_request_headers** but applied to the response
 - **lua_request_script**: (string) path to a Lua script that will be invoked for every incoming request; in the script it will be possible to modify the request before it is passed on to the server
-- **lua_request_load_body**: (boolean) set to *true* to enable lua script to read and modify the request payload; be aware that if this option is enabled ruxy will load and store in memory the whole request body and won't do any kind of streaming and that can impact performance; defaults to *false*
+- **lua_request_load_body**: (boolean) set to *true* to enable lua script to read and modify the request payload; be aware that if this option is enabled ruxy will load and store in memory the whole request body disabling any kind of streaming and that can impact performance; defaults to *false*
 
 **Note on logging**: log produced by ruxy will include the following strings:
 
