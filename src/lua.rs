@@ -179,6 +179,8 @@ fn response_to_lua<'a>(lua: &'a Lua, res: &http::response::Parts) -> LuaResult<m
 
 	if let Some(reason) = res.extensions.get::<hyper::ext::ReasonPhrase>().and_then(|v| std::str::from_utf8(v.as_bytes()).ok()) {
 		response.set("reason", reason)?;
+	} else if let Some(creason) = res.status.canonical_reason() {
+		response.set("reason", creason)?;
 	}
 
 	let headers = headers_to_lua(lua, &res.headers)?;
@@ -205,8 +207,17 @@ fn response_from_lua(lua: &mlua::Lua, mut parts: http::response::Parts, corr_id:
 		}
 	};
 	parts.headers = headers;
-	if let Some(reason) = reason.as_str().and_then(|v| hyper::ext::ReasonPhrase::try_from(v.as_bytes()).ok()) {
-		parts.extensions.insert(reason);
+	if let Some(reason) = reason.as_str() {
+		let canonical = parts.status.canonical_reason().unwrap_or("");
+		if canonical == reason {
+			parts.extensions.remove::<hyper::ext::ReasonPhrase>();
+		} else {
+			if let Ok(v) = hyper::ext::ReasonPhrase::try_from(reason.as_bytes()) {
+				parts.extensions.insert(v);
+			} else {
+				warn!("{}Invalid reason phrase: {}", corr_id, reason);
+			}
+		}
 	}
 
 	Ok((parts, body))
