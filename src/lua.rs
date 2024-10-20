@@ -373,3 +373,63 @@ pub async fn apply_response_script(action: &ConfigAction, res: Response<GatewayB
 	}
 }
 
+pub enum HandleResult {
+	Filled ( Response<GatewayBody> ),
+	Empty ( Request<GatewayBody> ),
+}
+
+pub async fn apply_handle_request_script(action: &ConfigAction, req: Request<GatewayBody>, client_addr: &str, corr_id: &str) -> Result<HandleResult, ServiceError> {
+	let script = match action.lua_handler_script() {
+		Some(v) => v,
+		None => return Ok(HandleResult::Empty(req)),
+	};
+
+	let code = match load_file(script) {
+		Err(e) => {
+			error!("{}cannot load {}: {:?}", corr_id, script, e);
+			return Ok(HandleResult::Empty(req));
+		},
+		Ok(v) => match v {
+			None => {
+				warn!("{}File '{}' not found", corr_id, script);
+				return Ok(HandleResult::Empty(req));
+			},
+			Some(v) => v,
+		}
+	};
+
+	let (parts, body) = req.into_parts();
+
+	let bdata = body.into_bytes(corr_id).await?;
+
+	let lua = Lua::new();
+
+	if let Err(e) = lua.globals().set("corr_id", corr_id) {
+		error!("{}Cannot set corr_id into globals: {:?}", corr_id, e);
+		return Ok(HandleResult::Empty(Request::from_parts(parts, GatewayBody::data(bdata))));
+	}
+	let lreq = match request_to_lua(&lua, &parts, client_addr) {
+		Ok(v) => v,
+		Err(e) => {
+			error!("{}Cannot set request into globals: {:?}", corr_id, e);
+			return Ok(HandleResult::Empty(Request::from_parts(parts, GatewayBody::data(bdata))));
+		},
+	};
+
+	let luabody = bdata.clone();
+	lreq.set("body", &(*luabody)).expect("Failed to set body");
+
+	lua.globals().set("request", lreq).expect("Failed to set request");
+
+	if let Err(e) = lua.load(code).exec() {
+		error!("{}Failed to run lua script: {:?}", corr_id, e);
+		return Ok(HandleResult::Empty(Request::from_parts(parts, GatewayBody::data(bdata))));
+	}
+
+	let (parts, _) = Response::new(GatewayBody::empty()).into_parts();
+	let (parts,out_body) = response_from_lua(&lua, parts, corr_id)?;
+
+	Ok(HandleResult::Filled(Response::from_parts(parts, out_body.and_then(|v| Some(GatewayBody::data(v.into()))).unwrap_or(GatewayBody::empty()))))
+}
+
+

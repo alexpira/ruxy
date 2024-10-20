@@ -268,6 +268,7 @@ pub struct ConfigAction {
 	request_lua_load_body: Option<bool>,
 	reply_lua_script: Option<String>,
 	reply_lua_load_body: Option<bool>,
+	handler_lua_script: Option<String>,
 }
 
 impl ConfigAction {
@@ -293,6 +294,7 @@ impl ConfigAction {
 				request_lua_load_body: t.get("request_lua_load_body").and_then(|v| v.as_bool()),
 				reply_lua_script: t.get("reply_lua_script").and_then(|v| v.as_str()).and_then(|v| Some(v.to_string())),
 				reply_lua_load_body: t.get("reply_lua_load_body").and_then(|v| v.as_bool()),
+				handler_lua_script: t.get("handler_lua_script").and_then(|v| v.as_str()).and_then(|v| Some(v.to_string())),
 			}),
 			_ => None,
 		}
@@ -318,6 +320,7 @@ impl ConfigAction {
 		self.request_lua_load_body = self.request_lua_load_body.take().or(other.request_lua_load_body.clone());
 		self.reply_lua_script = self.reply_lua_script.take().or(other.reply_lua_script.clone());
 		self.reply_lua_load_body = self.reply_lua_load_body.take().or(other.reply_lua_load_body.clone());
+		self.handler_lua_script = self.handler_lua_script.take().or(other.handler_lua_script.clone());
 	}
 
 	pub fn get_ssl_mode(&self) -> SslMode {
@@ -382,6 +385,9 @@ impl ConfigAction {
 	}
 	pub fn lua_reply_load_body(&self) -> bool {
 		self.reply_lua_load_body.unwrap_or(false)
+	}
+	pub fn lua_handler_script(&self) -> Option<&String> {
+		self.handler_lua_script.as_ref()
 	}
 
 	pub fn adapt_request(&self, mut req: Request<GatewayBody>, corr_id: &str) -> Result<Request<GatewayBody>, ServiceError> {
@@ -585,6 +591,7 @@ struct RawConfig {
 	request_lua_load_body: Option<bool>,
 	reply_lua_script: Option<String>,
 	reply_lua_load_body: Option<bool>,
+	handler_lua_script: Option<String>,
 	filters: Option<toml::Table>,
 	actions: Option<toml::Table>,
 	rules: Option<toml::Table>,
@@ -619,6 +626,7 @@ impl RawConfig {
 			request_lua_load_body: None,
 			reply_lua_script: None,
 			reply_lua_load_body: None,
+			handler_lua_script: None,
 			filters: None,
 			actions: None,
 			rules: None,
@@ -673,6 +681,7 @@ impl RawConfig {
 		self.request_lua_load_body = self.request_lua_load_body.take().or(other.request_lua_load_body);
 		self.reply_lua_script = self.reply_lua_script.take().or(other.reply_lua_script);
 		self.reply_lua_load_body = self.reply_lua_load_body.take().or(other.reply_lua_load_body);
+		self.handler_lua_script = self.handler_lua_script.take().or(other.handler_lua_script);
 		self.filters = self.filters.take().or(other.filters);
 		self.actions = self.actions.take().or(other.actions);
 		self.rules = self.rules.take().or(other.rules);
@@ -807,6 +816,7 @@ impl Config {
 				request_lua_load_body: raw_cfg.request_lua_load_body,
 				reply_lua_script: raw_cfg.reply_lua_script.clone(),
 				reply_lua_load_body: raw_cfg.reply_lua_load_body,
+				handler_lua_script: raw_cfg.handler_lua_script.clone(),
 			},
 			bind: Self::parse_bind(&raw_cfg),
 			graceful_shutdown_timeout: Self::parse_graceful_shutdown_timeout(&raw_cfg),
