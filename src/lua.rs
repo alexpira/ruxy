@@ -374,25 +374,25 @@ pub async fn apply_response_script(action: &ConfigAction, res: Response<GatewayB
 }
 
 pub enum HandleResult {
-	Filled ( Response<GatewayBody> ),
-	Empty ( Request<GatewayBody> ),
+	Handled ( Response<GatewayBody> ),
+	NotHandled ( Request<GatewayBody> ),
 }
 
 pub async fn apply_handle_request_script(action: &ConfigAction, req: Request<GatewayBody>, client_addr: &str, corr_id: &str) -> Result<HandleResult, ServiceError> {
 	let script = match action.lua_handler_script() {
 		Some(v) => v,
-		None => return Ok(HandleResult::Empty(req)),
+		None => return Ok(HandleResult::NotHandled(req)),
 	};
 
 	let code = match load_file(script) {
 		Err(e) => {
 			error!("{}cannot load {}: {:?}", corr_id, script, e);
-			return Ok(HandleResult::Empty(req));
+			return Err(ServiceError::from("Error loading handler".to_string()));
 		},
 		Ok(v) => match v {
 			None => {
 				warn!("{}File '{}' not found", corr_id, script);
-				return Ok(HandleResult::Empty(req));
+				return Err(ServiceError::from("Handler not found".to_string()));
 			},
 			Some(v) => v,
 		}
@@ -406,13 +406,13 @@ pub async fn apply_handle_request_script(action: &ConfigAction, req: Request<Gat
 
 	if let Err(e) = lua.globals().set("corr_id", corr_id) {
 		error!("{}Cannot set corr_id into globals: {:?}", corr_id, e);
-		return Ok(HandleResult::Empty(Request::from_parts(parts, GatewayBody::data(bdata))));
+		return Err(ServiceError::from("Handler interface error".to_string()));
 	}
 	let lreq = match request_to_lua(&lua, &parts, client_addr) {
 		Ok(v) => v,
 		Err(e) => {
 			error!("{}Cannot set request into globals: {:?}", corr_id, e);
-			return Ok(HandleResult::Empty(Request::from_parts(parts, GatewayBody::data(bdata))));
+			return Err(ServiceError::from("Handler interface error".to_string()));
 		},
 	};
 
@@ -423,13 +423,13 @@ pub async fn apply_handle_request_script(action: &ConfigAction, req: Request<Gat
 
 	if let Err(e) = lua.load(code).exec() {
 		error!("{}Failed to run lua script: {:?}", corr_id, e);
-		return Ok(HandleResult::Empty(Request::from_parts(parts, GatewayBody::data(bdata))));
+		return Err(ServiceError::from("Handler execution error".to_string()));
 	}
 
 	let (parts, _) = Response::new(GatewayBody::empty()).into_parts();
 	let (parts,out_body) = response_from_lua(&lua, parts, corr_id)?;
 
-	Ok(HandleResult::Filled(Response::from_parts(parts, out_body.and_then(|v| Some(GatewayBody::data(v.into()))).unwrap_or(GatewayBody::empty()))))
+	Ok(HandleResult::Handled(Response::from_parts(parts, out_body.and_then(|v| Some(GatewayBody::data(v.into()))).unwrap_or(GatewayBody::empty()))))
 }
 
 

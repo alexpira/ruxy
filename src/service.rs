@@ -183,9 +183,8 @@ impl GatewayService {
 		Ok(modified_request)
 	}
 
-	async fn mangle_reply(action: &ConfigAction, remote_resp: Response<Incoming>, sent_req: http::request::Parts, client_addr: &str, corr_id: &str) -> Result<Response<GatewayBody>, ServiceError> {
-		let response = remote_resp.map(|v| {
-			let mut body = GatewayBody::wrap(v);
+	async fn mangle_reply(action: &ConfigAction, remote_resp: Response<GatewayBody>, sent_req: http::request::Parts, client_addr: &str, corr_id: &str) -> Result<Response<GatewayBody>, ServiceError> {
+		let response = remote_resp.map(|mut body| {
 			if action.log_reply_body() {
 				body.log_payload(true, action.max_reply_log_size(), format!("{}<-PAYLOAD ", corr_id));
 			}
@@ -237,12 +236,15 @@ impl GatewayService {
 		let req_clone = request_parts.clone();
 		let remote_request = Request::from_parts(request_parts, request_body);
 
-		let mut sender = Self::get_sender(cfg, action).await?;
-		let remote_resp = errmg!(sender.value.send(remote_request).await);
-
-		remote_pool_release!(&sender.key, sender.value);
-
-		let remote_resp = remote_resp?;
+		let remote_resp = match lua::apply_handle_request_script(action, remote_request, client_addr, corr_id).await? {
+			lua::HandleResult::Handled(res) => res,
+			lua::HandleResult::NotHandled(req) => {
+				let mut sender = Self::get_sender(cfg, action).await?;
+				let remote_resp = errmg!(sender.value.send(req).await);
+				remote_pool_release!(&sender.key, sender.value);
+				remote_resp?.map(|v| GatewayBody::wrap(v))
+			},
+		};
 
 		Self::mangle_reply(&action, remote_resp, req_clone, &client_addr, &corr_id).await
 	}
