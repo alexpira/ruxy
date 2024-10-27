@@ -91,7 +91,7 @@ impl GatewayBody {
 		}
 	}
 
-	fn add_frame(&mut self, frame: &hyper::body::Bytes) {
+	fn add_frame(&mut self, frame: &Bytes) {
 		self.transfer_started = true;
 		if self.log_payload {
 			let newsz = self.current_payload_size + (frame.len() as i64);
@@ -137,7 +137,7 @@ impl GatewayBody {
 }
 
 impl hyper::body::Body for GatewayBody {
-	type Data = hyper::body::Bytes;
+	type Data = Bytes;
 	type Error = hyper::Error;
 
 	fn poll_frame(mut self: Pin<&mut Self>, cx: &mut Context<'_>,) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {

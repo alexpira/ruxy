@@ -87,6 +87,19 @@ fn headers_from_lua(container: &mlua::Table, corr_id: &str) -> Result<HeaderMap,
 	Ok(headers)
 }
 
+fn body_from_lua(body: Option<mlua::Value>) -> Option<Vec<u8>> {
+	body.and_then(|b| match b {
+		mlua::Value::String(s) => {
+			Some(s.as_bytes().to_vec())
+		},
+		_ => None,
+	})
+}
+fn body_to_lua<'a>(lua: &'a mlua::Lua, container: &'a mlua::Table, body: hyper::body::Bytes) {
+	let st = lua.create_string(&(*body)).expect("Failed to set body");
+	container.set("body", st).expect("Failed to set body");
+}
+
 fn request_to_lua<'a>(lua: &'a Lua, req: &http::request::Parts, client_addr: &str) -> LuaResult<mlua::Table<'a>> {
 let request = lua.create_table()?;
 	request.set("method", req.method.as_str())?;
@@ -114,7 +127,7 @@ let request = lua.create_table()?;
 	Ok(request)
 }
 
-fn request_from_lua(lua: &mlua::Lua, mut parts: http::request::Parts, corr_id: &str) -> Result<(http::request::Parts, Option<Box<[u8]>>), ServiceError> {
+fn request_from_lua(lua: &mlua::Lua, mut parts: http::request::Parts, corr_id: &str) -> Result<(http::request::Parts, Option<Vec<u8>>), ServiceError> {
 	let request: mlua::Table = werr!(lua.globals().get("request"));
 
 	let method: String = werr!(request.get("method"));
@@ -163,7 +176,7 @@ fn request_from_lua(lua: &mlua::Lua, mut parts: http::request::Parts, corr_id: &
 
 	let headers = headers_from_lua(&request, corr_id)?;
 
-	let body: Option<Box<[u8]>> = request.get("body").ok();
+	let body = body_from_lua(request.get("body").ok());
 
 	parts.method = method;
 	parts.uri = uri;
@@ -189,15 +202,13 @@ fn response_to_lua<'a>(lua: &'a Lua, res: &http::response::Parts) -> LuaResult<m
 	Ok(response)
 }
 
-fn response_from_lua(lua: &mlua::Lua, mut parts: http::response::Parts, corr_id: &str) -> Result<(http::response::Parts, Option<Box<[u8]>>), ServiceError> {
+fn response_from_lua(lua: &mlua::Lua, mut parts: http::response::Parts, corr_id: &str) -> Result<(http::response::Parts, Option<Vec<u8>>), ServiceError> {
 	let response: mlua::Table = werr!(lua.globals().get("response"));
 
 	let status: u16 = werr!(response.get("status"));
 	let reason: mlua::Value = werr!(response.get("reason"));
 
 	let headers = headers_from_lua(&response, corr_id)?;
-
-	let body: Option<Box<[u8]>> = response.get("body").ok();
 
 	parts.status = match http::StatusCode::from_u16(status) {
 		Ok(v) => v,
@@ -219,6 +230,8 @@ fn response_from_lua(lua: &mlua::Lua, mut parts: http::response::Parts, corr_id:
 			}
 		}
 	}
+
+	let body = body_from_lua(response.get("body").ok());
 
 	Ok((parts, body))
 }
@@ -270,8 +283,7 @@ pub async fn apply_request_script(action: &ConfigAction, req: Request<GatewayBod
 	};
 
 	let body_is_managed = if bdata.is_some() {
-		let luabody = bdata.clone().unwrap();
-		lreq.set("body", &(*luabody)).expect("Failed to set body");
+		body_to_lua(&lua, &lreq, bdata.clone().unwrap());
 		true
 	} else { false };
 
@@ -349,8 +361,7 @@ pub async fn apply_response_script(action: &ConfigAction, res: Response<GatewayB
 	};
 
 	let body_is_managed = if bdata.is_some() {
-		let luabody = bdata.clone().unwrap();
-		lres.set("body", &(*luabody)).expect("Failed to set body");
+		body_to_lua(&lua, &lres, bdata.clone().unwrap());
 		true
 	} else { false };
 
@@ -416,8 +427,7 @@ pub async fn apply_handle_request_script(action: &ConfigAction, req: Request<Gat
 		},
 	};
 
-	let luabody = bdata.clone();
-	lreq.set("body", &(*luabody)).expect("Failed to set body");
+	body_to_lua(&lua, &lreq, bdata.clone());
 
 	lua.globals().set("request", lreq).expect("Failed to set request");
 

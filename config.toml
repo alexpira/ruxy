@@ -29,8 +29,8 @@ add_reply_headers = { X-Ok = "Hello" }
 
 request_lua_script="./lua/test_request.lua"
 request_lua_load_body=true
-#reply_lua_script="./lua/test_reply.lua"
-#reply_lua_load_body=true
+reply_lua_script="./lua/test_reply.lua"
+reply_lua_load_body=true
 
 [filters]
 test = { path = "^/test$", method = "GET" }
