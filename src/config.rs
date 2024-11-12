@@ -626,7 +626,7 @@ impl RawConfig {
 			request_lua_load_body: None,
 			reply_lua_script: None,
 			reply_lua_load_body: None,
-			handler_lua_script: None,
+			handler_lua_script: Self::env_str("HANDLER_LUA_SCRIPT"),
 			filters: None,
 			actions: None,
 			rules: None,
@@ -793,11 +793,16 @@ impl Config {
 		};
 		raw_cfg.merge(content_cfg);
 
-		let remote = raw_cfg.remote.as_ref().expect("Missing main remote host in configuration");
+		let remote = raw_cfg.remote.as_ref();
+		let handler_lua_script = raw_cfg.handler_lua_script.clone();
+
+		if remote.is_none() && handler_lua_script.is_none() {
+			return Err(Box::from("Missing both remote host and lua handler script in configuration"));
+		}
 
 		Ok(Config {
 			default_action: ConfigAction {
-				remote: Some(RemoteConfig::build(remote)),
+				remote: remote.and_then(|v| Some(RemoteConfig::build(v))),
 				rewrite_host: raw_cfg.rewrite_host,
 				ssl_mode: Some(Self::parse_ssl_mode(&raw_cfg)),
 				http_client_version: Self::parse_http_version(&raw_cfg.http_client_version),
@@ -816,7 +821,7 @@ impl Config {
 				request_lua_load_body: raw_cfg.request_lua_load_body,
 				reply_lua_script: raw_cfg.reply_lua_script.clone(),
 				reply_lua_load_body: raw_cfg.reply_lua_load_body,
-				handler_lua_script: raw_cfg.handler_lua_script.clone(),
+				handler_lua_script: handler_lua_script,
 			},
 			bind: Self::parse_bind(&raw_cfg),
 			graceful_shutdown_timeout: Self::parse_graceful_shutdown_timeout(&raw_cfg),

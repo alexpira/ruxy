@@ -3,6 +3,6 @@ response = {
 	status = 200,
 	reason = "Lua",
 	headers = { ["x-test-lua"] = "handled" },
-	body = "hello",
+	body = "Hello " .. request.src .. ", you requested: " .. request.uri.path,
 }
 

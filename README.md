@@ -43,11 +43,13 @@ Also, some global configurations can be specified via the following environment 
 
 That allows a minimal setup to be done very easily without a configuration file (i.e. `BIND=0.0.0.0:8080 REMOTE=https://www.alessandropira.org/ REWRITE_HOST=true ./ruxy`).
 
+Other environment variables that can be used to specify global configurations are: **HANDLER_LUA_SCRIPT**, **GRACEFUL_SHUTDOWN_TIMEOUT**, **SSL_MODE**, **CAFILE**, **SERVER_SSL_CERT**, **SERVER_SSL_KEY**.
+
 ### Configuration
 
 Ruxy configuration file contains a main section where all the default behaviors are defined, and subsections where you can define configuration overrides for specific HTTP requests.
 
-This documentation, like the application itself, is still under development and for now you won't get all the details here, but the two values you always need to specify in the main part are **bind** and **remote** which are, respectively, the bind address for the listening socket and the url of the proxied application.
+The minimal configuration is achieved by specifying **bind** and **remote** which are, respectively, the bind address for the listening socket and the url of the proxied server.
 
 Exceptions to the default configurations are specified via *rules*, *actions* and *filters*.
 Actions represent behavior flags for a single request, while filters are used to match a request. Rules are made of composition of filters and actions.
@@ -133,6 +135,22 @@ if revme ~= nil then
 end
 ```
 
+Use ruxy as a standalone HTTP server with a Lua script handling all incoming requests:
+
+	bind = "localhost:8080"
+	handler_lua_script = "./handler.lua"
+
+```
+// handler.lua
+
+response = {
+	status = 200,
+	reason = "Ok",
+	headers = { ["Content-type"] = "text/plain" },
+	body = "Hello " .. request.src .. ", you requested: " .. request.uri.path,
+}
+```
+
 #### Main section parameters
 
 Main section is used for generic parameters. Every parameter that can be defined for an action (see below "actions section") can also be present in the main section and will cotribute to define the default behavior of ruxy.
@@ -143,7 +161,7 @@ Main section is used for generic parameters. Every parameter that can be defined
 - **log_stream**: boolean, enables low level log of all *server side* sent and received data (inside TLS), very verbose and useful for debugging of ruxy itself
 - **http_server_version**: either "h1" (default) or "h2"; used to define HTTP version used on listening socket
 
-Also, the following values can be defined in the main section to define the default behavior of ruxy: **remote** (mandatory), **rewrite_host**, **http_client_version**, **ssl_mode**, **cafile**, **log**, **log_level**, **log_headers**, **log_request_body**, **max_request_log_size**, **log_reply_body**, **max_reply_log_size**, **request_lua_script**, **request_lua_load_body**, **reply_lua_script**, **reply_lua_load_body**. See *actions* section for details.
+Also, the following values can be defined in the main section to define the default behavior of ruxy: **remote** (mandatory unless a global **handler_lua_script** is provided), **rewrite_host**, **http_client_version**, **ssl_mode**, **cafile**, **log**, **log_level**, **log_headers**, **log_request_body**, **max_request_log_size**, **log_reply_body**, **max_reply_log_size**, **request_lua_script**, **request_lua_load_body**, **reply_lua_script**, **reply_lua_load_body**, **handler_lua_script**. See *actions* section for details.
 
 #### Rules section
 
@@ -205,6 +223,7 @@ All action properties can be specified in the main section to define default rux
 - **request_lua_load_body**: (boolean) set to *true* to enable lua script to read and modify the request payload; be aware that if this option is enabled ruxy will load and store in memory the whole request body disabling any kind of streaming and that can impact performance; defaults to *false*
 - **reply_lua_script**: (string) path to a Lua script that will be invoked before sending the response to client; in the script it will be possible to modify the response before it is returned
 - **reply_lua_load_body**: (boolean) set to *true* to enable lua script to read and modify the response payload; be aware that if this option is enabled ruxy will load and store in memory the whole body disabling any kind of streaming and that can impact performance; defaults to *false*
+- **handler_lua_script**: (string) path to a Lua script that will be invoked *instead of* forwarding the request to the remote server; the script will be responsible of producing the whole response object that will be returned to the client
 
 **Note on logging**: log produced by ruxy will include the following strings:
 
@@ -235,6 +254,13 @@ If a Lua request script is configured, it will be invoked for every request. The
 - **reason**: if applicable for the protocol version, the textual reason following the status code
 - **headers**: a table whose values can either be strings or arrays of strings for repeated headers
 - **body**: the response payload, set only if **reply_lua_load_body** configuration is active
+
+### Lua remote server replacement
+
+While handling request and/or response can be used for modifiying an existing flow of data, Lua can also be used to replace entirely the remote server. That can be accomplished by specifying a path to a Lua script in the **handler_lua_script** action option.
+The provided script will be invoked *instead of* forwarding the request to the remote server. The global variable **request** will be filled as above, and the script must define a global variable **response** when ran. The produced response will be returned to the client.
+
+By using a Lua handler script, ruxy can act as a standalone HTTP server.
 
 ### Notes on AI training
 
