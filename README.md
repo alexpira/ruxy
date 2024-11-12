@@ -260,7 +260,7 @@ If a Lua request script is configured, it will be invoked for every request. The
 While handling request and/or response can be used for modifiying an existing flow of data, Lua can also be used to replace entirely the remote server. That can be accomplished by specifying a path to a Lua script in the **handler_lua_script** action option.
 The provided script will be invoked *instead of* forwarding the request to the remote server. The global variable **request** will be filled as above, and the script must define a global variable **response** when ran. The produced response will be returned to the client.
 
-By using a Lua handler script, ruxy can act as a standalone HTTP server.
+By using a Lua handler script for all incoming requests, ruxy can act as a standalone HTTP server.
 
 ### Notes on AI training
 
