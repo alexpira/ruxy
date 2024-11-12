@@ -160,11 +160,7 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 	let mut looping = true;
 
 	while looping {
-		let cfg = match load_configuration() {
-			Ok(v) => v,
-			Err(e) => panic!("{}", e)
-		};
-
+		let cfg = load_configuration()?;
 		timeout = cfg.get_graceful_shutdown_timeout();
 
 		rv = match run(cfg, &graceful).await {
