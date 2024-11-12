@@ -2,6 +2,9 @@
 
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+V11 = True
+CHUNK = True
+
 class WebRequestHandler(BaseHTTPRequestHandler):
 	def do_GET(self, method='GET'):
 		print(f'{method} {self.path}')
@@ -15,11 +18,25 @@ class WebRequestHandler(BaseHTTPRequestHandler):
 		if (data):
 			print(data)
 
-		self.send_response(200, "Yup")
+		if V11:
+			self.protocol_version = 'HTTP/1.1'
+			self.send_response(200, "Yup")
+			self.send_header("Connection", "close")
+		else:
+			self.send_response(200, "Yup")
+
 		self.send_header("Content-Type", "text/plain")
 		self.send_header("X-Sample", "response header")
+
+		if CHUNK:
+			payload = "2\r\nHe\r\n3\r\nllo\r\n0\r\n\r\n".encode("utf-8")
+			self.send_header("Transfer-encoding", "chunked")
+		else:
+			payload = "Hello".encode("utf-8")
+			self.send_header("Content-Length", len(payload))
+
 		self.end_headers()
-		self.wfile.write("Hello".encode("utf-8"))
+		self.wfile.write(payload)
 
 	def do_POST(self):
 		self.do_GET(method='POST')
