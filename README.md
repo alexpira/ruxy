@@ -5,7 +5,7 @@
 
 Ruxy is an HTTP transparent reverse proxy that can be useful for inspecting or checking application behavior. Ruxy is developed mainly for microservice environments but its use is not strictly limited to those.
 
-Features include (or will include):
+Features include:
 
 - **request and response headers/payload logging**
 - **TLS adding/stripping**
@@ -13,8 +13,6 @@ Features include (or will include):
 - **http version translation**
 - **canary releases**: put ruxy in front of two releases of the same application and use it to split traffic among them
 - **extensible**: support for [lua](https://www.lua.org/) scripting language to add your own behavior to ruxy
-
-**Note**: This application is still under development and features marked with a (\*) are still uncomplete
 
 ### Building
 
