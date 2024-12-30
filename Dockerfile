@@ -1,4 +1,6 @@
-FROM rust:1.83.0-slim AS builder
+FROM rust:1.83.0-bookworm AS builder
+
+RUN apt-get -y update && apt-get -y upgrade && apt-get -y install cmake libclang1 libclang-dev
 
 RUN mkdir /app
 ADD Cargo.toml /app/Cargo.toml
