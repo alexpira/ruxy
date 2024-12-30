@@ -1,4 +1,4 @@
-FROM rust:1.79.0-slim AS builder
+FROM rust:1.83.0-slim AS builder
 
 RUN mkdir /app
 ADD Cargo.toml /app/Cargo.toml
