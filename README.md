@@ -158,8 +158,9 @@ Main section is used for generic parameters. Every parameter that can be defined
 - **graceful_shutdown_timeout**: ruxy after receiving INT or TERM signals waits for this timeout to allow graceful termination of existing connections before shutting down; it must be specified as a string containing a number and one of the suffixes `"min"`, `"sec"` or `"ms"`; i.e.: `10sec` or `200ms`
 - **log_stream**: boolean, enables low level log of all *server side* sent and received data (inside TLS), very verbose and useful for debugging of ruxy itself
 - **http_server_version**: either "h1" (default) or "h2"; used to define HTTP version used on listening socket
+- **log_level**: global log verbosity configuration, either "Off", "Error", "Warn", "Info", "Debug" or "Trace"
 
-Also, the following values can be defined in the main section to define the default behavior of ruxy: **remote** (mandatory unless a global **handler_lua_script** is provided), **rewrite_host**, **http_client_version**, **ssl_mode**, **cafile**, **log**, **log_level**, **log_headers**, **log_request_body**, **max_request_log_size**, **log_reply_body**, **max_reply_log_size**, **request_lua_script**, **request_lua_load_body**, **reply_lua_script**, **reply_lua_load_body**, **handler_lua_script**. See *actions* section for details.
+Also, the following values can be defined in the main section to define the default behavior of ruxy: **remote** (mandatory unless a global **handler_lua_script** is provided), **rewrite_host**, **http_client_version**, **ssl_mode**, **cafile**, **log**, **log_headers**, **log_request_body**, **max_request_log_size**, **log_reply_body**, **max_reply_log_size**, **request_lua_script**, **request_lua_load_body**, **reply_lua_script**, **reply_lua_load_body**, **handler_lua_script**. See *actions* section for details.
 
 #### Rules section
 
