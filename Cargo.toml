@@ -26,6 +26,7 @@ rand = "0.8.5"
 base64 = "0.22.1"
 http = "1.1.0"
 mlua = { version = "0.9.9", features = ["lua54", "vendored"] }
+rustls-webpki = "0.102"
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 jni = "0.21.1"
