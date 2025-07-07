@@ -595,6 +595,7 @@ struct RawConfig {
 	filters: Option<toml::Table>,
 	actions: Option<toml::Table>,
 	rules: Option<toml::Table>,
+	rule_mode: Option<String>,
 }
 
 impl RawConfig {
@@ -630,6 +631,7 @@ impl RawConfig {
 			filters: None,
 			actions: None,
 			rules: None,
+			rule_mode: None,
 		}
 	}
 
@@ -685,6 +687,7 @@ impl RawConfig {
 		self.filters = self.filters.take().or(other.filters);
 		self.actions = self.actions.take().or(other.actions);
 		self.rules = self.rules.take().or(other.rules);
+		self.rule_mode = self.rule_mode.take().or(other.rule_mode);
 	}
 
 	fn get_filters(&self) -> HashMap<String,ConfigFilter> {
@@ -731,6 +734,21 @@ impl RawConfig {
 		}
 		return rv;
 	}
+
+	fn get_sorted_rules(&self) -> Vec<ConfigRule> {
+		if self.rules.is_none() {
+			return Vec::new();
+		}
+
+		let mut rv = Vec::new();
+		let data = self.rules.as_ref().unwrap();
+		for (k,v) in data.iter() {
+			if let Some(cr) = ConfigRule::parse(k.to_string(), v) {
+				rv.push(cr);
+			}
+		}
+		return rv;
+	}
 }
 
 #[derive(Clone,Copy)]
@@ -769,6 +787,33 @@ impl std::fmt::Display for SslMode {
 
 pub type SslData = (SslMode, HttpVersion, Option<PathBuf>);
 
+#[derive(Clone,Copy,PartialEq)]
+enum RuleMode { All, First }
+
+impl<T> From<T> for RuleMode where T: Into<String> {
+	fn from(value: T) -> RuleMode {
+		let value = value.into().trim().to_lowercase();
+
+		match value.as_str() {
+			"all" => RuleMode::All,
+			"first" => RuleMode::First,
+			_ => {
+				warn!("Invalid rule_mode in config file, falling back to \"first\"");
+				RuleMode::First
+			},
+		}
+	}
+}
+
+impl std::fmt::Display for RuleMode {
+	fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			RuleMode::All => formatter.write_str("All"),
+			RuleMode::First => formatter.write_str("First"),
+		}
+	}
+}
+
 #[derive(Clone)]
 pub struct Config {
 	bind: SocketAddr,
@@ -782,6 +827,8 @@ pub struct Config {
 	filters: HashMap<String,ConfigFilter>,
 	actions: HashMap<String,ConfigAction>,
 	rules: HashMap<String,ConfigRule>,
+	sorted_rules: Vec<ConfigRule>,
+	rule_mode: RuleMode,
 }
 
 impl Config {
@@ -821,7 +868,7 @@ impl Config {
 				request_lua_load_body: raw_cfg.request_lua_load_body,
 				reply_lua_script: raw_cfg.reply_lua_script.clone(),
 				reply_lua_load_body: raw_cfg.reply_lua_load_body,
-				handler_lua_script: handler_lua_script,
+				handler_lua_script,
 			},
 			bind: Self::parse_bind(&raw_cfg),
 			graceful_shutdown_timeout: Self::parse_graceful_shutdown_timeout(&raw_cfg),
@@ -832,7 +879,9 @@ impl Config {
 			filters: raw_cfg.get_filters(),
 			actions: raw_cfg.get_actions(),
 			rules: raw_cfg.get_rules(),
+			sorted_rules: raw_cfg.get_sorted_rules(),
 			log_stream: raw_cfg.log_stream.unwrap_or(false),
+			rule_mode: Self::parse_rule_mode(&raw_cfg)
 		})
 	}
 
@@ -840,16 +889,20 @@ impl Config {
 		let mut actions = Vec::new();
 		let mut rulenames = Vec::new();
 
-		for (rulename,rule) in self.rules.iter_mut() {
+		for rule in self.sorted_rules.iter_mut() {
 			if ! rule.matches(&self.filters, method, path, headers) {
 				continue;
 			}
 			rule.consume();
-			rulenames.push(rulename.clone());
+			rulenames.push(rule.name.clone());
 			for aname in &rule.actions {
 				if let Some(act) = self.actions.get(aname) {
 					actions.push(act);
 				}
+			}
+
+			if self.rule_mode == RuleMode::First {
+				break;
 			}
 		}
 		actions.push(&self.default_action);
@@ -968,6 +1021,13 @@ impl Config {
 		rc.ssl_mode
 			.as_ref()
 			.unwrap_or(&"builtin".to_string())
+			.into()
+	}
+
+	fn parse_rule_mode(rc: &RawConfig) -> RuleMode {
+		rc.rule_mode
+			.as_ref()
+			.unwrap_or(&"first".to_string())
 			.into()
 	}
 }

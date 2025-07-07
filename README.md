@@ -159,6 +159,7 @@ Main section is used for generic parameters. Every parameter that can be defined
 - **log_stream**: boolean, enables low level log of all *server side* sent and received data (inside TLS), very verbose and useful for debugging of ruxy itself
 - **http_server_version**: either "h1" (default) or "h2"; used to define HTTP version used on listening socket
 - **log_level**: global log verbosity configuration, either "Off", "Error", "Warn", "Info", "Debug" or "Trace"
+- **rule_mode**: rule selection logic: "All" or "First"; default is "First"
 
 Also, the following values can be defined in the main section to define the default behavior of ruxy: **remote** (mandatory unless a global **handler_lua_script** is provided), **rewrite_host**, **http_client_version**, **ssl_mode**, **cafile**, **log**, **log_headers**, **log_request_body**, **max_request_log_size**, **log_reply_body**, **max_reply_log_size**, **request_lua_script**, **request_lua_load_body**, **reply_lua_script**, **reply_lua_load_body**, **handler_lua_script**. See *actions* section for details.
 
@@ -172,7 +173,7 @@ For every icoming HTTP request ruxy does the following:
 
 - it checks every rule in the configuration
 - for every rule, if there are filters defined, all the filters must match the incoming request, otherwise the rule is discarded
-- the first matching rule is picked (rules are checked in alphabetical order)
+- depending on the **rule_mode** parameter, the first matching rule is picked (rules are checked in alphabetical order) or all rules are picked (merging all defined actions)
 - all the actions in the picked rule are applied for that specific request
 
 The following attributes can be specified for a rule:
