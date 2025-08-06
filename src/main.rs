@@ -145,6 +145,9 @@ async fn run(cfg: config::Config, graceful: &GracefulShutdown) -> Result<LoopRes
 				break;
 			},
 		}
+		if rv.restart {
+			break;
+		}
 	}
 
 	Ok(rv)
