@@ -29,8 +29,8 @@ pub struct ServiceError {
 impl ServiceError {
 	pub fn remap<T>(message: String, status: StatusCode, e: T) -> Self where T: Error + Send + 'static {
 		Self {
-			message: message,
-			status: status,
+			message,
+			status,
 			body: GatewayBody::empty(),
 			source: Some(Box::new(e)),
 		}
@@ -61,7 +61,7 @@ impl Error for ServiceError {
 impl From<String> for ServiceError {
 	fn from(message: String) -> Self {
 		Self {
-			message: message,
+			message,
 			status: StatusCode::BAD_GATEWAY,
 			body: GatewayBody::empty(),
 			source: None,
@@ -122,13 +122,11 @@ impl GatewayService {
 			} else {
 				Ok(Box::new(stream))
 			}
+		} else if log_stream {
+			let stream = crate::net::LoggingStream::wrap(stream);
+			Ok(Box::new(stream))
 		} else {
-			if log_stream {
-				let stream = crate::net::LoggingStream::wrap(stream);
-				Ok(Box::new(stream))
-			} else {
-				Ok(Box::new(stream))
-			}
+			Ok(Box::new(stream))
 		}
 	}
 
@@ -178,7 +176,7 @@ impl GatewayService {
 		Self::log_request(action, &req, client_addr, corr_id, "->R");
 		let modified_request = action.client_version().adapt_request(cfg, action, req, corr_id)?;
 		let modified_request = action.adapt_request(modified_request, corr_id)?;
-		let modified_request = lua::apply_request_script(&action, modified_request, client_addr, corr_id).await?;
+		let modified_request = lua::apply_request_script(action, modified_request, client_addr, corr_id).await?;
 		Self::log_request(action, &modified_request, client_addr, corr_id, "R->");
 		Ok(modified_request)
 	}
@@ -193,7 +191,7 @@ impl GatewayService {
 		Self::log_reply(action, &response, client_addr, corr_id, "R<-");
 		let modified_response = action.client_version().adapt_response(action, response)?;
 		let modified_response = action.adapt_response(modified_response, corr_id)?;
-		let modified_response = lua::apply_response_script(&action, modified_response, sent_req, client_addr, corr_id).await?;
+		let modified_response = lua::apply_response_script(action, modified_response, sent_req, client_addr, corr_id).await?;
 		Self::log_reply(action, &modified_response, client_addr, corr_id, "<-R");
 		Ok(modified_response)
 	}
@@ -242,11 +240,11 @@ impl GatewayService {
 				let mut sender = Self::get_sender(cfg, action).await?;
 				let remote_resp = errmg!(sender.value.send(req).await);
 				remote_pool_release!(&sender.key, sender.value);
-				remote_resp?.map(|v| GatewayBody::wrap(v))
+				remote_resp?.map(GatewayBody::wrap)
 			},
 		};
 
-		Self::mangle_reply(&action, remote_resp, req_clone, &client_addr, &corr_id).await
+		Self::mangle_reply(action, remote_resp, req_clone, client_addr, corr_id).await
 	}
 }
 
@@ -282,18 +280,16 @@ impl Service<Request<Incoming>> for GatewayService {
 
 			Self::forward(&cfg, &action, req, &client_addr, &corr_id)
 				.await
-				.and_then(|remote_resp| {
+				.inspect(|remote_resp| {
 					if let Ok(mut locked) = cfg_local.lock() {
 						let status = remote_resp.status();
 						locked.notify_reply(rules, &status);
 					}
-					Ok(remote_resp)
 				}).or_else(|e| {
 					error!("Call forward failed: {:?}", e.message);
 					Response::builder()
 						.status(e.status)
 						.body(e.body)
-
 				})
 		})
 	}

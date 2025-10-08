@@ -98,7 +98,7 @@ impl HttpVersion {
 		}
 	}
 
-	fn to_version(&self) -> Version {
+	fn to_version(self) -> Version {
 		match self {
 			HttpVersion::H1 => Version::HTTP_11,
 			HttpVersion::H2 => Version::HTTP_2,

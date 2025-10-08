@@ -95,10 +95,10 @@ pub struct RemoteConfig {
 impl RemoteConfig {
 	fn build(remote: &str) -> RemoteConfig {
 		RemoteConfig {
-			address: Self::parse_remote(&remote),
-			raw: Self::extract_remote_host_def(&remote),
-			domain: Self::parse_remote_domain(&remote),
-			ssl: Self::parse_remote_ssl(&remote),
+			address: Self::parse_remote(remote),
+			raw: Self::extract_remote_host_def(remote),
+			domain: Self::parse_remote_domain(remote),
+			ssl: Self::parse_remote_ssl(remote),
 		}
 	}
 
@@ -202,8 +202,8 @@ impl ConfigFilter {
 							None
 						},
 					}),
-				method: t.get("method").and_then(|v| v.as_str()).and_then(|v| Some(v.to_string())),
-				headers: t.get("headers").and_then(|v| Self::parse_headers(v)),
+				method: t.get("method").and_then(|v| v.as_str()).map(|v| v.to_string()),
+				headers: t.get("headers").and_then(Self::parse_headers),
 
 			}),
 			_ => None,
@@ -219,7 +219,7 @@ impl ConfigFilter {
 
 		if let Some(rexp) = self.path.as_ref() {
 			let pstr = path.path();
-			if !rexp.is_match(&pstr) {
+			if !rexp.is_match(pstr) {
 				return false;
 			}
 		}
@@ -275,9 +275,9 @@ impl ConfigAction {
 	fn parse(v: &toml::Value) -> Option<ConfigAction> {
 		match v {
 			toml::Value::Table(t) => Some(ConfigAction {
-				remote: t.get("remote").and_then(|v| v.as_str()).and_then(|v| Some(RemoteConfig::build(v))),
+				remote: t.get("remote").and_then(|v| v.as_str()).map(RemoteConfig::build),
 				rewrite_host: t.get("rewrite_host").and_then(|v| v.as_bool()),
-				http_client_version: t.get("http_client_version").and_then(|v| v.as_str()).and_then(|v| HttpVersion::parse(v)),
+				http_client_version: t.get("http_client_version").and_then(|v| v.as_str()).and_then(HttpVersion::parse),
 				log: t.get("log").and_then(|v| v.as_bool()),
 				log_headers: t.get("log_headers").and_then(|v| v.as_bool()),
 				log_request_body: t.get("log_request_body").and_then(|v| v.as_bool()),
@@ -286,15 +286,15 @@ impl ConfigAction {
 				max_reply_log_size: t.get("max_reply_log_size").and_then(|v| v.as_integer()),
 				cafile: t.get("cafile").and_then(|v| v.as_str()).map(|v| Path::new(v).to_path_buf()),
 				ssl_mode: t.get("ssl_mode").and_then(|v| v.as_str()).map(|v| v.to_string().into()),
-				remove_request_headers: t.get("remove_request_headers").and_then(|v| parse_array(v)),
-				add_request_headers: t.get("add_request_headers").and_then(|v| parse_header_map(v)),
-				remove_reply_headers: t.get("remove_reply_headers").and_then(|v| parse_array(v)),
-				add_reply_headers: t.get("add_reply_headers").and_then(|v| parse_header_map(v)),
-				request_lua_script: t.get("request_lua_script").and_then(|v| v.as_str()).and_then(|v| Some(v.to_string())),
+				remove_request_headers: t.get("remove_request_headers").and_then(parse_array),
+				add_request_headers: t.get("add_request_headers").and_then(parse_header_map),
+				remove_reply_headers: t.get("remove_reply_headers").and_then(parse_array),
+				add_reply_headers: t.get("add_reply_headers").and_then(parse_header_map),
+				request_lua_script: t.get("request_lua_script").and_then(|v| v.as_str()).map(|v| v.to_string()),
 				request_lua_load_body: t.get("request_lua_load_body").and_then(|v| v.as_bool()),
-				reply_lua_script: t.get("reply_lua_script").and_then(|v| v.as_str()).and_then(|v| Some(v.to_string())),
+				reply_lua_script: t.get("reply_lua_script").and_then(|v| v.as_str()).map(|v| v.to_string()),
 				reply_lua_load_body: t.get("reply_lua_load_body").and_then(|v| v.as_bool()),
-				handler_lua_script: t.get("handler_lua_script").and_then(|v| v.as_str()).and_then(|v| Some(v.to_string())),
+				handler_lua_script: t.get("handler_lua_script").and_then(|v| v.as_str()).map(|v| v.to_string()),
 			}),
 			_ => None,
 		}
@@ -317,9 +317,9 @@ impl ConfigAction {
 		self.remove_reply_headers = self.remove_reply_headers.take().or(other.remove_reply_headers.clone());
 		self.add_reply_headers = self.add_reply_headers.take().or(other.add_reply_headers.clone());
 		self.request_lua_script = self.request_lua_script.take().or(other.request_lua_script.clone());
-		self.request_lua_load_body = self.request_lua_load_body.take().or(other.request_lua_load_body.clone());
+		self.request_lua_load_body = self.request_lua_load_body.take().or(other.request_lua_load_body);
 		self.reply_lua_script = self.reply_lua_script.take().or(other.reply_lua_script.clone());
-		self.reply_lua_load_body = self.reply_lua_load_body.take().or(other.reply_lua_load_body.clone());
+		self.reply_lua_load_body = self.reply_lua_load_body.take().or(other.reply_lua_load_body);
 		self.handler_lua_script = self.handler_lua_script.take().or(other.handler_lua_script.clone());
 	}
 
@@ -467,7 +467,7 @@ impl ConfigRule {
 	fn parse(name: String, v: &toml::Value) -> Option<ConfigRule> {
 		match v {
 			toml::Value::Table(t) => Some(ConfigRule {
-				name: name,
+				name,
 				filters: Self::load_vec(t, "filter", "filters"),
 				actions: Self::load_vec(t, "action", "actions"),
 				enabled: t.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true),
@@ -490,7 +490,7 @@ impl ConfigRule {
 							None
 						},
 					}),
-				max_life: t.get("max_life").and_then(|v| v.as_integer()).and_then(|v| Some(v as u64)),
+				max_life: t.get("max_life").and_then(|v| v.as_integer()).map(|v| v as u64),
 				consumed: 0u64,
 			}),
 			_ => None,
@@ -557,7 +557,6 @@ impl ConfigRule {
 			if ! check.is_match(&status_str) {
 				info!("Disabling rule {} due to reply status {} not matching keep_while rule", &self.name, &status_str);
 				self.enabled = false;
-				return;
 			}
 		}
 	}
@@ -702,7 +701,7 @@ impl RawConfig {
 				rv.insert(k.to_string(),cf);
 			}
 		}
-		return rv;
+		rv
 	}
 
 	fn get_actions(&self) -> HashMap<String,ConfigAction> {
@@ -717,7 +716,7 @@ impl RawConfig {
 				rv.insert(k.to_string(),ca);
 			}
 		}
-		return rv;
+		rv
 	}
 
 	fn get_rules(&self) -> HashMap<String,ConfigRule> {
@@ -732,7 +731,7 @@ impl RawConfig {
 				rv.insert(k.to_string(), cr);
 			}
 		}
-		return rv;
+		rv
 	}
 
 	fn get_sorted_rules(&self) -> Vec<ConfigRule> {
@@ -747,7 +746,7 @@ impl RawConfig {
 				rv.push(cr);
 			}
 		}
-		return rv;
+		rv
 	}
 }
 
@@ -834,7 +833,7 @@ pub struct Config {
 impl Config {
 	pub fn load(content: &str) -> Result<Self, Box<dyn Error + Send + Sync>> {
 		let mut raw_cfg = RawConfig::from_env();
-		let content_cfg: RawConfig = match toml::from_str(&content) {
+		let content_cfg: RawConfig = match toml::from_str(content) {
 			Ok(v) => v,
 			Err(err) => return Err(Box::from(format!("Config parsing error: {}", err)))
 		};
@@ -849,7 +848,7 @@ impl Config {
 
 		Ok(Config {
 			default_action: ConfigAction {
-				remote: remote.and_then(|v| Some(RemoteConfig::build(v))),
+				remote: remote.map(|v| RemoteConfig::build(v)),
 				rewrite_host: raw_cfg.rewrite_host,
 				ssl_mode: Some(Self::parse_ssl_mode(&raw_cfg)),
 				http_client_version: Self::parse_http_version(&raw_cfg.http_client_version),
@@ -860,10 +859,10 @@ impl Config {
 				max_request_log_size: raw_cfg.max_request_log_size,
 				log_reply_body: raw_cfg.log_reply_body,
 				max_reply_log_size: raw_cfg.max_reply_log_size,
-				remove_request_headers: raw_cfg.remove_request_headers.as_ref().and_then(|v| parse_array(v)),
-				add_request_headers: raw_cfg.add_request_headers.as_ref().and_then(|v| parse_header_map(v)),
-				remove_reply_headers: raw_cfg.remove_reply_headers.as_ref().and_then(|v| parse_array(v)),
-				add_reply_headers: raw_cfg.add_reply_headers.as_ref().and_then(|v| parse_header_map(v)),
+				remove_request_headers: raw_cfg.remove_request_headers.as_ref().and_then(parse_array),
+				add_request_headers: raw_cfg.add_request_headers.as_ref().and_then(parse_header_map),
+				remove_reply_headers: raw_cfg.remove_reply_headers.as_ref().and_then(parse_array),
+				add_reply_headers: raw_cfg.add_reply_headers.as_ref().and_then(parse_header_map),
 				request_lua_script: raw_cfg.request_lua_script.clone(),
 				request_lua_load_body: raw_cfg.request_lua_load_body,
 				reply_lua_script: raw_cfg.reply_lua_script.clone(),
@@ -1000,11 +999,11 @@ impl Config {
 	}
 
 	fn parse_file(value: &Option<String>) -> Option<PathBuf> {
-		value.as_ref().and_then(|v| Some(Path::new(v).to_path_buf()))
+		value.as_ref().map(|v| Path::new(v).to_path_buf())
 	}
 	fn parse_log_level(value: &Option<String>) -> LevelFilter {
 		let lev = value.as_ref()
-			.and_then(|v| Some(v.to_lowercase()))
+			.map(|v| v.to_lowercase())
 			.unwrap_or("".to_string());
 
 		match lev.trim() {

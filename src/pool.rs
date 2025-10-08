@@ -68,10 +68,24 @@ impl<K,V> PoolMap<K,V> where K: Eq + Hash + Clone, V: Send {
 				}
 			},
 			None => {
-				let mut v = Vec::new();
-				v.push(elem);
-				(*data).insert(key.clone(), v);
+				(*data).insert(key.clone(), vec![elem]);
 			},
+		};
+	}
+
+	pub fn clear(&self) {
+		if self.max == 0 {
+			return;
+		}
+
+		match self.data.lock() {
+			Ok(mut v) => {
+				v.clear();
+			},
+			Err(poisoned) => {
+				let mut v = poisoned.into_inner();
+				v.clear();
+			}
 		};
 	}
 }
@@ -95,3 +109,7 @@ macro_rules! remote_pool_release {
 }
 pub(crate) use remote_pool_release;
 
+macro_rules! remote_pool_clear {
+	() => { crate::pool::REMOTE_CONN_POOL.clear() }
+}
+pub(crate) use remote_pool_clear;

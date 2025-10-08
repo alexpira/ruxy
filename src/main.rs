@@ -6,6 +6,7 @@ use tokio::signal::unix::{signal, SignalKind};
 use log::{info,warn,error};
 use std::{env,time::Duration};
 
+use pool::remote_pool_clear;
 use net::{Stream,config_socket};
 use service::GatewayService;
 
@@ -146,6 +147,7 @@ async fn run(cfg: config::Config, graceful: &GracefulShutdown) -> Result<LoopRes
 			},
 		}
 		if rv.restart {
+			remote_pool_clear!();
 			break;
 		}
 	}

@@ -42,9 +42,9 @@ impl Sender for hyper::client::conn::http2::SendRequest<GatewayBody> {
 }
 
 enum BodyKind {
-	EMPTY,
-	INCOMING(Incoming),
-	BYTES(Bytes),
+	Empty,
+	Incoming(Incoming),
+	Bytes(Bytes),
 }
 
 pub struct GatewayBody {
@@ -61,7 +61,7 @@ pub struct GatewayBody {
 impl GatewayBody {
 	fn init(inner: BodyKind) -> GatewayBody {
 		GatewayBody {
-			inner: inner,
+			inner,
 			log_payload: false,
 			log_prefix: "".to_string(),
 			log_frames: Vec::new(),
@@ -72,13 +72,13 @@ impl GatewayBody {
 	}
 
 	pub fn empty() -> GatewayBody {
-		Self::init(BodyKind::EMPTY)
+		Self::init(BodyKind::Empty)
 	}
 	pub fn wrap(inner: Incoming) -> GatewayBody {
-		Self::init(BodyKind::INCOMING(inner))
+		Self::init(BodyKind::Incoming(inner))
 	}
 	pub fn data(inner: Bytes) -> GatewayBody {
-		Self::init(BodyKind::BYTES(inner))
+		Self::init(BodyKind::Bytes(inner))
 	}
 
 	pub fn log_payload(&mut self, value: bool, max_size: i64, log_prefix: String) {
@@ -121,9 +121,9 @@ impl GatewayBody {
 
 	pub async fn into_bytes(self, corr_id: &str) -> Result<Bytes,ServiceError> {
 		match self.inner {
-			BodyKind::EMPTY => Ok(Bytes::from_static(&[])),
-			BodyKind::BYTES(buf) => Ok(buf),
-			BodyKind::INCOMING(incoming) => {
+			BodyKind::Empty => Ok(Bytes::from_static(&[])),
+			BodyKind::Bytes(buf) => Ok(buf),
+			BodyKind::Incoming(incoming) => {
 				let coll = match incoming.collect().await {
 					Ok(v) => v,
 					Err(e) => {
@@ -144,11 +144,11 @@ impl hyper::body::Body for GatewayBody {
 		let me = &mut *self.as_mut().get_mut();
 
 		match &mut me.inner {
-			BodyKind::EMPTY => {
+			BodyKind::Empty => {
 				me.end();
 				Poll::Ready(None)
 			},
-			BodyKind::BYTES(buf) => {
+			BodyKind::Bytes(buf) => {
 				let remind = buf.remaining();
 				if remind > 0 {
 					let data = buf.copy_to_bytes(usize::min(remind, 4096));
@@ -160,7 +160,7 @@ impl hyper::body::Body for GatewayBody {
 					Poll::Ready(None)
 				}
 			},
-			BodyKind::INCOMING(incoming) => {
+			BodyKind::Incoming(incoming) => {
 				let poll = Pin::new(incoming).poll_frame(cx);
 				let vopt = core::task::ready!(poll);
 
@@ -181,7 +181,7 @@ impl hyper::body::Body for GatewayBody {
 		}
 
 /*
-		if me.kind == BodyKind::BYTES {
+		if me.kind == BodyKind::Bytes {
 			if me.bytes_read {
 				return Poll::Ready(None);
 			} else if me.bytes.is_none() {
@@ -222,12 +222,12 @@ impl hyper::body::Body for GatewayBody {
 
 	fn is_end_stream(&self) -> bool {
 		match &self.inner {
-			BodyKind::EMPTY => true,
-			BodyKind::BYTES(buf) => !buf.has_remaining(),
-			BodyKind::INCOMING(inc) => inc.is_end_stream(),
+			BodyKind::Empty => true,
+			BodyKind::Bytes(buf) => !buf.has_remaining(),
+			BodyKind::Incoming(inc) => inc.is_end_stream(),
 		}
 /*
-		if self.kind == BodyKind::BYTES {
+		if self.kind == BodyKind::Bytes {
 			return self.bytes_read;
 		}
 	
@@ -256,7 +256,7 @@ pub(crate) use keepalive;
 
 macro_rules! config_socket {
 	($sock: expr) => {
-		$sock.set_linger(Some(Duration::from_secs(0))).unwrap_or_else(|err| { warn!("{}:{} Failed to set SO_LINGER on socket: {:?}", file!(), line!(), err); () });
+		$sock.set_linger(Some(Duration::from_secs(0))).unwrap_or_else(|err| { warn!("{}:{} Failed to set SO_LINGER on socket: {:?}", file!(), line!(), err) });
 	}
 }
 pub(crate) use config_socket;
@@ -286,11 +286,11 @@ impl LoggingStream {
 					if ch.is_ascii_graphic() {
 						cline.push_str(std::str::from_utf8(&[ch]).unwrap_or("."));
 					} else {
-						cline.push_str(".");
+						cline.push('.');
 					}
 				} else {
 					bline.push_str("   ");
-					cline.push_str(" ");
+					cline.push(' ');
 				}
 			}
 			info!("{} {}{}", dirst, bline, cline);
