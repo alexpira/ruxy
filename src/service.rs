@@ -169,7 +169,7 @@ impl GatewayService {
 		let req = req.map(|v| {
 			let mut body = GatewayBody::wrap(v);
 			if action.log_request_body() {
-				body.log_payload(true, action.max_request_log_size(), format!("{}->PAYLOAD ", corr_id));
+				body.log_payload(true, action.max_request_log_size(), format!("{}{} R-> ", corr_id, client_addr));
 			}
 			body
 		});
@@ -184,7 +184,7 @@ impl GatewayService {
 	async fn mangle_reply(action: &ConfigAction, remote_resp: Response<GatewayBody>, sent_req: http::request::Parts, client_addr: &str, corr_id: &str) -> Result<Response<GatewayBody>, ServiceError> {
 		let response = remote_resp.map(|mut body| {
 			if action.log_reply_body() {
-				body.log_payload(true, action.max_reply_log_size(), format!("{}<-PAYLOAD ", corr_id));
+				body.log_payload(true, action.max_reply_log_size(), format!("{}{} <-R ", corr_id, client_addr));
 			}
 			body
 		});

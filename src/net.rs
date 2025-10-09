@@ -105,7 +105,7 @@ impl GatewayBody {
 		}
 	}
 
-	fn end(&self) {
+	fn end(&mut self) {
 		if self.log_payload {
 			let bdata = self.log_frames.clone().concat();
 			let log = String::from_utf8(bdata).unwrap_or_else(|v| {
@@ -116,6 +116,7 @@ impl GatewayBody {
 			} else {
 				info!("{}BODY: {}", self.log_prefix, log);
 			}
+			self.log_payload = false;
 		}
 	}
 
@@ -154,6 +155,9 @@ impl hyper::body::Body for GatewayBody {
 					let data = buf.copy_to_bytes(usize::min(remind, 4096));
 					me.add_frame(&data);
 					let frame = Frame::data(data);
+					if me.is_end_stream() {
+						me.end();
+					}
 					Poll::Ready(Some(Ok(frame)))
 				} else {
 					me.end();
@@ -173,6 +177,9 @@ impl hyper::body::Body for GatewayBody {
 					Ok(frm) => {
 						if let Some(data) = frm.data_ref() {
 							me.add_frame(data);
+						}
+						if me.is_end_stream() {
+							me.end();
 						}
 						Poll::Ready(Some(Ok(frm)))
 					},
@@ -226,6 +233,7 @@ impl hyper::body::Body for GatewayBody {
 			BodyKind::Bytes(buf) => !buf.has_remaining(),
 			BodyKind::Incoming(inc) => inc.is_end_stream(),
 		}
+
 /*
 		if self.kind == BodyKind::Bytes {
 			return self.bytes_read;
