@@ -9,7 +9,7 @@ WORKDIR /app
 
 RUN cargo build --release
 
-FROM debian:stable-slim
+FROM debian:trixie-slim
 
 COPY --from=builder /app/target/release/ruxy /ruxy
 
