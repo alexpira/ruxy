@@ -1,4 +1,4 @@
-FROM rust:1.83.0-bookworm AS builder
+FROM rust:1.90.0-slim-trixie AS builder
 
 RUN apt-get -y update && apt-get -y upgrade && apt-get -y install cmake libclang1 libclang-dev
 

@@ -35,6 +35,14 @@ impl ServiceError {
 			source: Some(Box::new(e)),
 		}
 	}
+	pub fn new(message: String, status: StatusCode) -> Self {
+		Self {
+			message,
+			status,
+			body: GatewayBody::empty(),
+			source: None
+		}
+	}
 }
 
 impl fmt::Display for ServiceError {

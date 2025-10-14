@@ -10,6 +10,7 @@ use log::{warn,error};
 
 use rustls::{Error,SignatureScheme,DigitallySignedStruct};
 use rustls::client::danger::{ServerCertVerifier,ServerCertVerified,HandshakeSignatureValid};
+use rustls_platform_verifier::BuilderVerifierExt;
 
 use crate::config::{Config,RemoteConfig,SslMode,SslData};
 use crate::net::Stream;
@@ -135,8 +136,8 @@ fn build_client_ssl_config(cfg: SslData) -> rustls::ClientConfig {
 			panic!("\"os\" ssl mode not availble on android");
 #[cfg(not(target_os = "android"))]
 			config
-				.dangerous() // The `Verifier` we're using is actually safe
-				.with_custom_certificate_verifier(Arc::new(rustls_platform_verifier::Verifier::new()))
+				.with_platform_verifier()
+				.expect("Cannot access \"os\" ssl provider")
 				.with_no_client_auth()
 		},
 		SslMode::Dangerous => {

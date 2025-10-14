@@ -13,7 +13,7 @@ macro_rules! werr {
 	( $data: expr ) => { match $data {
 		Ok(v) => v,
 		Err(e) => {
-			return Err(ServiceError::remap("Failed to convert from lua".to_string(), hyper::StatusCode::BAD_GATEWAY, e));
+			return Err(ServiceError::new(format!("Failed to convert from lua: {:?}", e), hyper::StatusCode::BAD_GATEWAY));
 		}
 	} }
 }
@@ -38,7 +38,7 @@ fn append_header(headers: &mut HeaderMap, key: String, value: mlua::String, corr
 	Ok(())
 }
 
-fn headers_to_lua<'a>(lua: &'a Lua, rheaders: &HeaderMap) -> LuaResult<mlua::Table<'a>> {
+fn headers_to_lua(lua: &Lua, rheaders: &HeaderMap) -> LuaResult<mlua::Table> {
 	let headers = lua.create_table()?;
 	for key in rheaders.keys() {
 		let mut values = Vec::new();
@@ -67,7 +67,7 @@ fn headers_to_lua<'a>(lua: &'a Lua, rheaders: &HeaderMap) -> LuaResult<mlua::Tab
 
 fn headers_from_lua(container: &mlua::Table, corr_id: &str) -> Result<HeaderMap,ServiceError> {
 	let mut headers = HeaderMap::new();
-	if let Some(lhdrs) = werr!(container.get::<&str, mlua::Value>("headers")).as_table() {
+	if let mlua::Value::Table(lhdrs) = werr!(container.get::<mlua::Value>("headers")) {
 		werr!(lhdrs.for_each(|k: String, v: mlua::Value| {
 			match v {
 				mlua::Value::String(st) => append_header(&mut headers, k, st, corr_id),
@@ -100,7 +100,7 @@ fn body_to_lua<'a>(lua: &'a mlua::Lua, container: &'a mlua::Table, body: hyper::
 	container.set("body", st).expect("Failed to set body");
 }
 
-fn request_to_lua<'a>(lua: &'a Lua, req: &http::request::Parts, client_addr: &str) -> LuaResult<mlua::Table<'a>> {
+fn request_to_lua(lua: &Lua, req: &http::request::Parts, client_addr: &str) -> LuaResult<mlua::Table> {
 let request = lua.create_table()?;
 	request.set("method", req.method.as_str())?;
 
@@ -142,11 +142,13 @@ fn request_from_lua(lua: &mlua::Lua, mut parts: http::request::Parts, corr_id: &
 
 	let mut uri_parts = http::uri::Parts::default();
 
-	uri_parts.scheme = scheme.as_str()
+	uri_parts.scheme = scheme.as_string()
+		.and_then(|s| s.to_str().ok())
+		.as_ref()
 		.and_then(|v| http::uri::Scheme::from_str(v).ok())
 		.or(parts.uri.scheme().cloned());
 
-	uri_parts.authority = if let Some(hstr) = host.as_str() {
+	uri_parts.authority = if let Some(hstr) = host.as_string().and_then(|s| s.to_str().ok()) {
 		let fullstr = if let Some(pvalue) = port.as_u32() {
 			format!("{}:{}", hstr, pvalue)
 		} else {
@@ -157,8 +159,8 @@ fn request_from_lua(lua: &mlua::Lua, mut parts: http::request::Parts, corr_id: &
 		parts.uri.authority().cloned()
 	};
 
-	uri_parts.path_and_query = if let Some(pstr) = path.as_str() {
-		let fullstr = if let Some(qvalue) = query.as_str() {
+	uri_parts.path_and_query = if let Some(pstr) = path.as_string().and_then(|s| s.to_str().ok()) {
+		let fullstr = if let Some(qvalue) = query.as_string().and_then(|s| s.to_str().ok()) {
 			if qvalue.is_empty() {
 				pstr.to_string()
 			} else {
@@ -185,7 +187,7 @@ fn request_from_lua(lua: &mlua::Lua, mut parts: http::request::Parts, corr_id: &
 	Ok((parts, body))
 }
 
-fn response_to_lua<'a>(lua: &'a Lua, res: &http::response::Parts) -> LuaResult<mlua::Table<'a>> {
+fn response_to_lua(lua: &Lua, res: &http::response::Parts) -> LuaResult<mlua::Table> {
 	let response = lua.create_table()?;
 
 	response.set("status", res.status.as_u16())?;
@@ -218,16 +220,14 @@ fn response_from_lua(lua: &mlua::Lua, mut parts: http::response::Parts, corr_id:
 		}
 	};
 	parts.headers = headers;
-	if let Some(reason) = reason.as_str() {
+	if let Some(reason) = reason.as_string().and_then(|s| s.to_str().ok()) {
 		let canonical = parts.status.canonical_reason().unwrap_or("");
-		if canonical == reason {
+		if *canonical == *reason {
 			parts.extensions.remove::<hyper::ext::ReasonPhrase>();
+		} else if let Ok(v) = hyper::ext::ReasonPhrase::try_from(reason.as_bytes()) {
+			parts.extensions.insert(v);
 		} else {
-			if let Ok(v) = hyper::ext::ReasonPhrase::try_from(reason.as_bytes()) {
-				parts.extensions.insert(v);
-			} else {
-				warn!("{}Invalid reason phrase: {}", corr_id, reason);
-			}
+			warn!("{}Invalid reason phrase: {}", corr_id, reason);
 		}
 	}
 
