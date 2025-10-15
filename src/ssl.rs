@@ -10,6 +10,7 @@ use log::{warn,error};
 
 use rustls::{Error,SignatureScheme,DigitallySignedStruct};
 use rustls::client::danger::{ServerCertVerifier,ServerCertVerified,HandshakeSignatureValid};
+#[cfg(not(target_os = "android"))]
 use rustls_platform_verifier::BuilderVerifierExt;
 
 use crate::config::{Config,RemoteConfig,SslMode,SslData};
