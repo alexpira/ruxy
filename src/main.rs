@@ -43,10 +43,7 @@ async fn shutdown_signal_term() {
 }
 
 fn load_env(name: &str) -> Option<String> {
-	match env::var(name) {
-		Ok(v) => Some(v),
-		Err(_) => None
-	}
+	env::var(name).ok()
 }
 
 enum ConfigSource { File, Env }
@@ -139,7 +136,7 @@ async fn run(cfg: config::Config, graceful: &GracefulShutdown) -> Result<LoopRes
 			},
 			_ = &mut signal_int => {
 				info!("shutdown signal SIGINT received");
-				break;
+		break;
 			},
 			_ = &mut signal_term => {
 				info!("shutdown signal SIGTERM received");
@@ -155,8 +152,26 @@ async fn run(cfg: config::Config, graceful: &GracefulShutdown) -> Result<LoopRes
 	Ok(rv)
 }
 
+fn help() {
+	let a0 = std::env::args().next().unwrap_or("ruxy".to_string());
+	println!("ruxy version {0}, a reverse proxy by Alessandro Pira\n\
+\n\
+Usage:\n\
+  {1} -h: shows this help\n\
+  {1} -e [VARNAME]: loads configuration from environment variable\n\
+  {1} -f [FILE] loads configuration from file\n\
+\n\
+see https://github.com/alexpira/ruxy/blob/main/README.md for more documentation\
+", env!("CARGO_PKG_VERSION"), a0);
+}
+
 #[tokio::main]
 pub async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+	if std::env::args().rfind(|v| "-h" == v).is_some() {
+		help();
+		return Ok(());
+	}
+		
 	logcfg::init_logging();
 
 	let graceful = GracefulShutdown::new();
