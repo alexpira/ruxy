@@ -32,7 +32,7 @@ impl<K,V> PoolMap<K,V> where K: Eq + Hash + Clone, V: Send {
 
 	fn is_alive(&self, elem: &PoolElement<V>, ref_ts: &Instant) -> bool {
 		match self.idle_life_ms {
-			None => true,
+			None => false,
 			Some(life) => ref_ts.duration_since(elem.birth).as_millis() <= life
 		}
 	}

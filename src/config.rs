@@ -888,7 +888,7 @@ impl Config {
 			log_stream: raw_cfg.log_stream.unwrap_or(false),
 			rule_mode: Self::parse_rule_mode(&raw_cfg),
 			connection_pool_max_size: raw_cfg.connection_pool_max_size.unwrap_or(10),
-			connection_pool_max_life_ms: raw_cfg.connection_pool_max_life_ms.filter(|x| *x >= 0).map(|x| x as u128),
+			connection_pool_max_life_ms: raw_cfg.connection_pool_max_life_ms.or(Some(30000)).filter(|x| *x >= 0).map(|x| x as u128),
 		})
 	}
 
