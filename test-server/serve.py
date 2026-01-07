@@ -7,7 +7,7 @@ CHUNK = True
 
 class WebRequestHandler(BaseHTTPRequestHandler):
 	def do_GET(self, method='GET'):
-		print(f'{method} {self.path}')
+		print(f'{self.request.getpeername()} {method} {self.path}')
 
 		data = None
 		for (h,v) in self.headers.items():
@@ -20,8 +20,9 @@ class WebRequestHandler(BaseHTTPRequestHandler):
 
 		if V11:
 			self.protocol_version = 'HTTP/1.1'
-			self.send_response(200, "Yup")
-			self.send_header("Connection", "close")
+		self.send_response(200, "Yup")
+		# Gets closed server side anyway
+		self.send_header("Connection", "close")
 		else:
 			self.send_response(200, "Yup")
 

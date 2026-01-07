@@ -27,6 +27,10 @@ remove_request_headers = [ "X-Test2" ]
 remove_reply_headers = [ "x-sample" ]
 add_reply_headers = { X-Ok = "Hello" }
 
+connection_pool_max_size = 10
+# unset -> default 30 sec, 0 or less -> unlimited
+connection_pool_max_life_ms = 20000
+
 #request_lua_script="./lua/test_request.lua"
 #request_lua_load_body=true
 #reply_lua_script="./lua/test_reply.lua"
