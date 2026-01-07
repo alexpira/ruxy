@@ -20,9 +20,9 @@ class WebRequestHandler(BaseHTTPRequestHandler):
 
 		if V11:
 			self.protocol_version = 'HTTP/1.1'
-		self.send_response(200, "Yup")
-		# Gets closed server side anyway
-		self.send_header("Connection", "close")
+			self.send_response(200, "Yup")
+			# Gets closed server side anyway
+			self.send_header("Connection", "close")
 		else:
 			self.send_response(200, "Yup")
 
