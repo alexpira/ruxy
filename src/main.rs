@@ -4,11 +4,12 @@ use hyper_util::rt::tokio::TokioIo;
 use hyper_util::server::graceful::GracefulShutdown;
 use tokio::signal::unix::{signal, SignalKind};
 use log::{info,warn,error};
-use std::{env,time::Duration};
+use std::{env, sync::Arc, time::Duration};
 
-use pool::remote_pool_clear;
 use net::{Stream,config_socket};
 use service::GatewayService;
+
+use crate::{service::ConnectionPool};
 
 mod pool;
 mod filesys;
@@ -79,12 +80,12 @@ struct LoopResult {
 	restart: bool,
 }
 
-async fn run(cfg: config::Config, graceful: &GracefulShutdown) -> Result<LoopResult, Box<dyn std::error::Error + Send + Sync>> {
+async fn run(cfg: config::Config, graceful: &GracefulShutdown, connection_pool: Arc<ConnectionPool>) -> Result<LoopResult, Box<dyn std::error::Error + Send + Sync>> {
 	logcfg::set_log_level(cfg.get_log_level());
 	let addr = cfg.get_bind();
 	let srv_version = cfg.server_version();
 
-	let svc = GatewayService::new(cfg.clone());
+	let svc = GatewayService::new(cfg.clone(), connection_pool.clone());
 
 	let mut signal_hup = Box::pin(shutdown_signal_hup());
 	let mut signal_int = std::pin::pin!(shutdown_signal_int());
@@ -130,7 +131,7 @@ async fn run(cfg: config::Config, graceful: &GracefulShutdown) -> Result<LoopRes
 			},
 			_ = &mut signal_hup => {
 				info!("signal SIGHUP received");
-				// signal_hup = Box::pin(shutdown_signal_hup());
+			// signal_hup = Box::pin(shutdown_signal_hup());
 				rv.restart = true;
 				break;
 			},
@@ -144,7 +145,7 @@ async fn run(cfg: config::Config, graceful: &GracefulShutdown) -> Result<LoopRes
 			},
 		}
 		if rv.restart {
-			remote_pool_clear!();
+			(*connection_pool).clear();
 			break;
 		}
 	}
@@ -181,9 +182,10 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
 	while looping {
 		let cfg = load_configuration()?;
+		let connection_pool: Arc<ConnectionPool> = Arc::new(cfg.create_connection_pool());
 		timeout = cfg.get_graceful_shutdown_timeout();
 
-		rv = match run(cfg, &graceful).await {
+		rv = match run(cfg, &graceful, connection_pool.clone()).await {
 			Ok(lresult) => {
 				if !lresult.restart {
 					looping = false;

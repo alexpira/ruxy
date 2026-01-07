@@ -264,7 +264,15 @@ pub(crate) use keepalive;
 
 macro_rules! config_socket {
 	($sock: expr) => {
-		$sock.set_linger(Some(Duration::from_secs(0))).unwrap_or_else(|err| { warn!("{}:{} Failed to set SO_LINGER on socket: {:?}", file!(), line!(), err) });
+//		Quoting from https://docs.rs/tokio/latest/tokio/net/struct.TcpSocket.html#method.set_linger:
+//
+//		<<This option is deprecated because setting SO_LINGER on a socket used with Tokio is always
+//		incorrect as it leads to blocking the thread when the socket is closed>>
+//
+//		The idea was to free the port as fast as possible when the application shuts down, but I'll
+//		comment this out for now.
+//
+//		$sock.set_linger(Some(std::time::Duration::from_secs(0))).unwrap_or_else(|err| { log::warn!("{}:{} Failed to set SO_LINGER on socket: {:?}", file!(), line!(), err) });
 	}
 }
 pub(crate) use config_socket;

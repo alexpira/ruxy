@@ -1,24 +1,44 @@
-use std::{collections::HashMap,sync::Mutex,hash::Hash};
+use std::{collections::HashMap, hash::Hash, sync::Mutex, time::Instant};
 use log::warn;
-use lazy_static::lazy_static;
 
-use crate::net::Sender;
+struct PoolElement<V> where V: Send {
+	content: V,
+	birth: Instant,
+}
+
+impl<V> PoolElement<V> where V: Send {
+	pub fn new(content: V) -> Self {
+		PoolElement {
+			content,
+			birth: Instant::now(),
+		}
+	}
+}
 
 pub struct PoolMap<K,V> where K: Eq + Hash + Clone, V: Send {
-	data: Mutex<HashMap<K,Vec<V>>>,
-	max: u16,
+	data: Mutex<HashMap<K,Vec<PoolElement<V>>>>,
+	max_size_per_key: i32,
+	idle_life_ms: Option<u128>,
 }
 
 impl<K,V> PoolMap<K,V> where K: Eq + Hash + Clone, V: Send {
-	pub fn new(maxsz: u16) -> PoolMap<K,V> {
+	pub fn new(max_size_per_key: i32, idle_life_ms: Option<u128>) -> PoolMap<K,V> {
 		PoolMap {
 			data: Mutex::new(HashMap::new()),
-			max: maxsz,
+			max_size_per_key,
+			idle_life_ms,
+		}
+	}
+
+	fn is_alive(&self, elem: &PoolElement<V>, ref_ts: &Instant) -> bool {
+		match self.idle_life_ms {
+			None => true,
+			Some(life) => ref_ts.duration_since(elem.birth).as_millis() <= life
 		}
 	}
 
 	pub fn get(&self, key: &K) -> Option<V> {
-		if self.max == 0 {
+		if self.max_size_per_key <= 0 {
 			return None;
 		}
 
@@ -34,18 +54,21 @@ impl<K,V> PoolMap<K,V> where K: Eq + Hash + Clone, V: Send {
 
 		match data.get_mut(key) {
 			Some(pool) => {
-				if pool.is_empty() {
-					None
-				} else {
-					Some(pool.remove(0))
+				let now = Instant::now();
+				while !pool.is_empty() {
+					let elem = pool.remove(0);
+					if self.is_alive(&elem, &now) {
+						return Some(elem.content);
+					}
 				}
+				None
 			},
 			None => None,
 		}
 	}
 
 	pub fn release(&self, key: &K, elem: V) {
-		if self.max == 0 {
+		if self.max_size_per_key <= 0 {
 			return;
 		}
 
@@ -61,20 +84,20 @@ impl<K,V> PoolMap<K,V> where K: Eq + Hash + Clone, V: Send {
 
 		match data.get_mut(key) {
 			Some(pool) => {
-				pool.push(elem);
-				let todel = (pool.len() as i32) - (self.max as i32);
+				pool.push(PoolElement::new(elem));
+				let todel = (pool.len() as i32) - self.max_size_per_key;
 				if todel > 0 {
 					pool.drain(0..(todel as usize));
 				}
 			},
 			None => {
-				(*data).insert(key.clone(), vec![elem]);
+				(*data).insert(key.clone(), vec![PoolElement::new(elem)]);
 			},
 		};
 	}
 
 	pub fn clear(&self) {
-		if self.max == 0 {
+		if self.max_size_per_key <= 0 {
 			return;
 		}
 
@@ -90,26 +113,3 @@ impl<K,V> PoolMap<K,V> where K: Eq + Hash + Clone, V: Send {
 	}
 }
 
-lazy_static! {
-	pub static ref REMOTE_CONN_POOL: PoolMap<String,Box<dyn Sender>> = PoolMap::new(10);
-}
-
-macro_rules! remote_pool_key {
-	($addr: expr, $httpver: expr) => { format!("{}:{}:{:?}", $addr.0.to_lowercase(), $addr.1, $httpver.id()) }
-}
-pub(crate) use remote_pool_key;
-
-macro_rules! remote_pool_get {
-	($target: expr) => { crate::pool::REMOTE_CONN_POOL.get($target) }
-}
-pub(crate) use remote_pool_get;
-
-macro_rules! remote_pool_release {
-	($target: expr, $sender: expr) => { crate::pool::REMOTE_CONN_POOL.release($target, $sender) }
-}
-pub(crate) use remote_pool_release;
-
-macro_rules! remote_pool_clear {
-	() => { crate::pool::REMOTE_CONN_POOL.clear() }
-}
-pub(crate) use remote_pool_clear;

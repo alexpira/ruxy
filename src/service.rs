@@ -10,14 +10,15 @@ use std::error::Error;
 use std::fmt;
 use std::fmt::Debug;
 use hyper_util::rt::tokio::TokioIo;
-use log::{debug,info,warn,error};
-use std::time::Duration;
+use log::{debug,info,error};
 use std::net::SocketAddr;
 
-use crate::pool::{remote_pool_key,remote_pool_get,remote_pool_release};
+use crate::pool::PoolMap;
 use crate::net::{Stream,Sender,GatewayBody,config_socket};
 use crate::config::{Config,RemoteConfig,ConfigAction,SslData};
 use crate::lua;
+
+pub type ConnectionPool = PoolMap<String,Box<dyn Sender>>;
 
 pub struct ServiceError {
 	message: String,
@@ -77,6 +78,10 @@ impl From<String> for ServiceError {
 	}
 }
 
+macro_rules! pool_key {
+	($addr: expr, $httpver: expr) => { format!("{}:{}:{:?}", $addr.0.to_lowercase(), $addr.1, $httpver.id()) }
+}
+
 macro_rules! errmg {
 	($arg: expr) => {
 		($arg).map_err(|e| ServiceError::remap(
@@ -97,14 +102,16 @@ pub struct GatewayService {
 	cfg: Arc<Mutex<Config>>,
 	original_cfg: Config,
 	client: Option<SocketAddr>,
+	connection_pool: Arc<ConnectionPool>,
 }
 
 impl GatewayService {
-	pub fn new(cfg: Config) -> Self {
+	pub fn new(cfg: Config, connection_pool: Arc<ConnectionPool>) -> Self {
 		Self {
 			cfg: Arc::new(Mutex::new(cfg.clone())),
 			original_cfg: cfg,
 			client: None,
+			connection_pool,
 		}
 	}
 
@@ -204,14 +211,14 @@ impl GatewayService {
 		Ok(modified_response)
 	}
 
-	async fn get_sender(cfg: &Config, action: &ConfigAction) -> Result<CachedSender, ServiceError> {
+	async fn get_sender(cfg: &Config, action: &ConfigAction, connection_pool: Arc<ConnectionPool>) -> Result<CachedSender, ServiceError> {
 		let remote = action.get_remote();
 		let address = remote.address();
 		let httpver = action.client_version();
-		let conn_pool_key = remote_pool_key!(address,httpver);
+		let conn_pool_key = pool_key!(address,httpver);
 		let ssldata: SslData = (action.get_ssl_mode(), httpver, action.get_ca_file());
 
-		let sender = if let Some(mut pool) = remote_pool_get!(&conn_pool_key) {
+		let sender = if let Some(mut pool) = (*connection_pool).get(&conn_pool_key) {
 			if pool.check().await {
 				Some(pool)
 			} else {
@@ -235,7 +242,7 @@ impl GatewayService {
 		})
 	}
 
-	async fn forward(cfg: &Config, action: &ConfigAction, req: Request<Incoming>, client_addr: &str, corr_id: &str) -> Result<Response<GatewayBody>, ServiceError> {
+	async fn forward(cfg: &Config, connection_pool: Arc<ConnectionPool>, action: &ConfigAction, req: Request<Incoming>, client_addr: &str, corr_id: &str) -> Result<Response<GatewayBody>, ServiceError> {
 		let remote_request = Self::mangle_request(cfg, action, req, client_addr, corr_id).await?;
 
 		let (request_parts, request_body) = remote_request.into_parts();
@@ -245,9 +252,9 @@ impl GatewayService {
 		let remote_resp = match lua::apply_handle_request_script(action, remote_request, client_addr, corr_id).await? {
 			lua::HandleResult::Handled(res) => res,
 			lua::HandleResult::NotHandled(req) => {
-				let mut sender = Self::get_sender(cfg, action).await?;
+				let mut sender = Self::get_sender(cfg, action, connection_pool.clone()).await?;
 				let remote_resp = errmg!(sender.value.send(req).await);
-				remote_pool_release!(&sender.key, sender.value);
+				(*connection_pool).release(&sender.key, sender.value);
 				remote_resp?.map(GatewayBody::wrap)
 			},
 		};
@@ -275,6 +282,7 @@ impl Service<Request<Incoming>> for GatewayService {
 		})).clone();
 
 		let (action, rules) = cfg.get_request_config(&method, &uri, &headers);
+		let cpool = self.connection_pool.clone();
 
 		Box::pin(async move {
 			let corr_id = format!("{:?} ", uuid::Uuid::new_v4());
@@ -286,7 +294,7 @@ impl Service<Request<Incoming>> for GatewayService {
 				}
 			}
 
-			Self::forward(&cfg, &action, req, &client_addr, &corr_id)
+			Self::forward(&cfg, cpool, &action, req, &client_addr, &corr_id)
 				.await
 				.inspect(|remote_resp| {
 					if let Ok(mut locked) = cfg_local.lock() {

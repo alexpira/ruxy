@@ -9,7 +9,8 @@ use regex::Regex;
 use log::{LevelFilter,info,warn};
 
 use crate::net::GatewayBody;
-use crate::service::ServiceError;
+use crate::pool::PoolMap;
+use crate::service::{ConnectionPool, ServiceError};
 use crate::c3po::HttpVersion;
 
 fn parse_array(v: &toml::Value) -> Option<Vec<String>> {
@@ -595,6 +596,8 @@ struct RawConfig {
 	actions: Option<toml::Table>,
 	rules: Option<toml::Table>,
 	rule_mode: Option<String>,
+	connection_pool_max_size: Option<i32>,
+	connection_pool_max_life_ms: Option<i32>,
 }
 
 impl RawConfig {
@@ -631,14 +634,13 @@ impl RawConfig {
 			actions: None,
 			rules: None,
 			rule_mode: None,
+			connection_pool_max_size: None,
+			connection_pool_max_life_ms: None,
 		}
 	}
 
 	fn env_str(name: &str) -> Option<String> {
-		match env::var(name) {
-			Ok(v) => Some(v),
-			Err(_) => None
-		}
+		env::var(name).ok()
 	}
 
 	fn env_bool(name: &str) -> Option<bool> {
@@ -687,6 +689,8 @@ impl RawConfig {
 		self.actions = self.actions.take().or(other.actions);
 		self.rules = self.rules.take().or(other.rules);
 		self.rule_mode = self.rule_mode.take().or(other.rule_mode);
+		self.connection_pool_max_size = self.connection_pool_max_size.take().or(other.connection_pool_max_size);
+		self.connection_pool_max_life_ms = self.connection_pool_max_life_ms.take().or(other.connection_pool_max_life_ms);
 	}
 
 	fn get_filters(&self) -> HashMap<String,ConfigFilter> {
@@ -828,6 +832,8 @@ pub struct Config {
 	rules: HashMap<String,ConfigRule>,
 	sorted_rules: Vec<ConfigRule>,
 	rule_mode: RuleMode,
+	connection_pool_max_size: i32,
+	connection_pool_max_life_ms: Option<u128>,
 }
 
 impl Config {
@@ -880,8 +886,14 @@ impl Config {
 			rules: raw_cfg.get_rules(),
 			sorted_rules: raw_cfg.get_sorted_rules(),
 			log_stream: raw_cfg.log_stream.unwrap_or(false),
-			rule_mode: Self::parse_rule_mode(&raw_cfg)
+			rule_mode: Self::parse_rule_mode(&raw_cfg),
+			connection_pool_max_size: raw_cfg.connection_pool_max_size.unwrap_or(10),
+			connection_pool_max_life_ms: raw_cfg.connection_pool_max_life_ms.filter(|x| *x >= 0).map(|x| x as u128),
 		})
+	}
+
+	pub fn create_connection_pool(&self) -> ConnectionPool {
+		PoolMap::new(self.connection_pool_max_size, self.connection_pool_max_life_ms)
 	}
 
 	fn get_actions<'a>(&'a mut self, method: &Method, path: &Uri, headers: &HeaderMap) -> (Vec<&'a ConfigAction>,Vec<String>) {
