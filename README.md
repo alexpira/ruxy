@@ -153,13 +153,15 @@ response = {
 
 Main section is used for generic parameters. Every parameter that can be defined for an action (see below "actions section") can also be present in the main section and will cotribute to define the default behavior of ruxy.
 
-- **bind**: address and port for the listening socket, i.e.: `127.0.0.1:8080`
-- **server_ssl_cert** and **server_ssl_key**: certificate and private key file for enabling TLS on listening socket
-- **graceful_shutdown_timeout**: ruxy after receiving INT or TERM signals waits for this timeout to allow graceful termination of existing connections before shutting down; it must be specified as a string containing a number and one of the suffixes `"min"`, `"sec"` or `"ms"`; i.e.: `10sec` or `200ms`
-- **log_stream**: boolean, enables low level log of all *server side* sent and received data (inside TLS), very verbose and useful for debugging of ruxy itself
-- **http_server_version**: either "h1" (default) or "h2"; used to define HTTP version used on listening socket
-- **log_level**: global log verbosity configuration, either "Off", "Error", "Warn", "Info", "Debug" or "Trace"
-- **rule_mode**: rule selection logic: "All" or "First"; default is "First"
+- **bind**: (string) address and port for the listening socket, i.e.: `127.0.0.1:8080`
+- **server_ssl_cert** and **server_ssl_key**: (string) certificate and private key file for enabling TLS on listening socket
+- **graceful_shutdown_timeout**: (string) ruxy after receiving INT or TERM signals waits for this timeout to allow graceful termination of existing connections before shutting down; it must be specified as a string containing a number and one of the suffixes `"min"`, `"sec"` or `"ms"`; i.e.: `10sec` or `200ms`
+- **log_stream**: (boolean) enables low level log of all *server side* sent and received data (inside TLS), very verbose and useful for debugging of ruxy itself
+- **http_server_version**: (string) either "h1" (default) or "h2"; used to define HTTP version used on listening socket
+- **log_level**: (string) global log verbosity configuration, either "Off", "Error", "Warn", "Info", "Debug" or "Trace"
+- **rule_mode**: (string) rule selection logic: "All" or "First"; default is "First"
+- **connection_pool_max_size**: (integer) the total number of idle HTTP connections that are kept open in order to be reused (for each remote host/port endpoint); this is related to outgoing, remote-side HTTP connections and does not affect incoming connections; default is 10
+- **connection_pool_max_life_ms**: (integer) the maximum time after which an unused HTTP connection  will be closed (as before, this is related to outgoing connections); a value of 0 or less keeps connections open indefinitely; default is 30000
 
 Also, the following values can be defined in the main section to define the default behavior of ruxy: **remote** (mandatory unless a global **handler_lua_script** is provided), **rewrite_host**, **http_client_version**, **ssl_mode**, **cafile**, **log**, **log_headers**, **log_request_body**, **max_request_log_size**, **log_reply_body**, **max_reply_log_size**, **request_lua_script**, **request_lua_load_body**, **reply_lua_script**, **reply_lua_load_body**, **handler_lua_script**. See *actions* section for details.
 
