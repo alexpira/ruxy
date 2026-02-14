@@ -1,4 +1,10 @@
 
+# Moved to codeberg
+
+This project has moved to [codeberg](https://codeberg.org/al3x77/ruxy)
+
+![](https://codeberg.org/Codeberg/Design/raw/branch/main/logo/vertical/svg/codeberg-logo_vertical_blue.svg)
+
 # RUXY
 
 ## A reverse proxy written in rust
