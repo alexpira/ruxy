@@ -1,9 +1,11 @@
 
 # Moved to codeberg
 
-This project has moved to [codeberg](https://codeberg.org/al3x77/ruxy)
+This project has moved to [codeberg](https://codeberg.org/al3x77/ruxy/)
 
-![](https://codeberg.org/Codeberg/Design/raw/branch/main/logo/vertical/svg/codeberg-logo_vertical_blue.svg)
+<a href="https://codeberg.org/al3x77/ruxy/">
+    <img alt="Get it on Codeberg" src="https://get-it-on.codeberg.org/get-it-on-blue-on-white.png" height="60">
+</a>
 
 # RUXY
 
